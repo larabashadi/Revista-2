@@ -32,8 +32,9 @@ setUsers(u.data || []);
       setErr(e?.message || "No puedo cargar usuarios");
     }
     try {
-      const c = await api.get("/api/admin/clubs");
-      setClubs(c || []);
+     const c = await api.get("/api/admin/clubs");
+setClubs(c.data || []);
+
     } catch (e: any) {
       // clubs endpoint may not exist yet on older DB; ignore
     }
