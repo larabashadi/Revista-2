@@ -391,14 +391,18 @@ export default function Editor() {
   }, [projectId, doc, pageIndex]);
 
 
-  const newId = () => {
+  const newId = (prefix?: string) => {
+  const base = (() => {
     try {
       // @ts-ignore
       return crypto?.randomUUID?.() || `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     } catch {
       return `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     }
-  };
+  })();
+  return prefix ? `${prefix}_${base}` : base;
+};
+
 
   const ensureContentLayer = (page: any) => {
     page.layers = page.layers || [];
