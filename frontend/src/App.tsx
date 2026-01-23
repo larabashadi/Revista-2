@@ -2,7 +2,7 @@ import React from "react";
 import { BrowserRouter, Routes, Route, Navigate, Link } from "react-router-dom";
 
 import Login from "./pages/Login";
-import Register from "./pages/Register";
+
 import Dashboard from "./pages/Dashboard";
 import Editor from "./pages/Editor";
 import AdminDashboard from "./pages/AdminDashboard";
@@ -15,7 +15,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
+         
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/editor/:magazineId" element={<Editor />} />
           <Route path="/admin" element={<AdminDashboard />} />
