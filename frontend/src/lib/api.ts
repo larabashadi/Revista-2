@@ -29,8 +29,9 @@ export function setToken(token: string | null) {
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("sms_token") || localStorage.getItem("token");
   if (token) {
-    config.headers = config.headers || {};
-    (config.headers as any).Authorization = `Bearer ${token}`;
+    config.headers = (config.headers ?? ({} as any)) as any;
+(config.headers as any).Authorization = `Bearer ${token}`;
+
   }
   return config;
 });
