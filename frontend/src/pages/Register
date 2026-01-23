@@ -1,0 +1,52 @@
+import React, { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "../store/auth";
+
+// Página de registro opcional (por si tu App.tsx tiene /register)
+export default function Register() {
+  const nav = useNavigate();
+  const { register } = useAuth();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit() {
+    setErr(null);
+    try {
+      await register(email, password);
+      const u = (useAuth as any).getState().user;
+      nav(u?.role === "super_admin" ? "/admin" : "/");
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || "Error");
+    }
+  }
+
+  return (
+    <div className="layout" style={{ gridTemplateColumns: "1fr" }}>
+      <div className="main" style={{ maxWidth: 560, margin: "0 auto" }}>
+        <div className="card">
+          <h2 style={{ marginTop: 0 }}>Crear cuenta</h2>
+          <p style={{ color: "var(--muted)", marginTop: 0 }}>
+            Crea tu cuenta para empezar a personalizar tu revista.
+          </p>
+
+          <div className="field">
+            <label>Email</label>
+            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="club@correo.com" />
+          </div>
+
+          <div className="field">
+            <label>Contraseña</label>
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="********" />
+          </div>
+
+          {err && <div style={{ color: "#ff8aa0", marginBottom: 10 }}>{err}</div>}
+          <div style={{ display: "flex", gap: 10 }}>
+            <button className="btn primary" onClick={submit}>Crear</button>
+            <button className="btn" onClick={() => nav("/login")}>Ya tengo cuenta</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
