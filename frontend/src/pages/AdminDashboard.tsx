@@ -26,7 +26,8 @@ export default function AdminDashboard() {
     setErr("");
     try {
       const u = await api.get("/api/admin/users");
-      setUsers(u || []);
+setUsers(u.data || []);
+
     } catch (e: any) {
       setErr(e?.message || "No puedo cargar usuarios");
     }
