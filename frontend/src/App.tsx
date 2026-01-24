@@ -9,7 +9,7 @@ import AdminDashboard from "./pages/AdminDashboard";
 
 export default function App() {
   return (
-    <BrowserRouter>
+    
       <div style={{ minHeight: "100vh", background: "#0b1020", color: "#fff" }}>
         <TopNav />
         <Routes>
@@ -22,7 +22,7 @@ export default function App() {
           <Route path="*" element={<NotFound />} />
         </Routes>
       </div>
-    </BrowserRouter>
+   
   );
 }
 
