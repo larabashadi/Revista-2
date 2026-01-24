@@ -5,11 +5,8 @@ import axios from "axios";
 // - In builds without a dev proxy, set VITE_API_BASE (e.g. http://localhost:8000)
 //   so requests still work.
 const env = (import.meta as any)?.env ?? {};
-const baseURL = String(
-  env.VITE_API_BASE ||
-  env.VITE_API_BASE ||
-  "https://revista-2-1.onrender.com"   // <-- tu backend
-).replace(/\/+$/, "");
+const baseURL = String((import.meta as any)?.env?.VITE_API_BASE || "https://revista-2-1.onrender.com").replace(/\/+$/, "");
+
 
 
 export const api = axios.create({
