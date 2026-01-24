@@ -392,14 +392,15 @@ export default function Editor() {
   }, [projectId, doc, pageIndex]);
 
 
-  const newId = () => {
-    try {
-      // @ts-ignore
-      return crypto?.randomUUID?.() || `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    } catch {
-      return `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    }
-  };
+  const newId = (prefix?: string) => {
+  const base =
+    // @ts-ignore
+    (crypto?.randomUUID?.() as string | undefined) ||
+    `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+  return prefix ? `${prefix}_${base}` : base;
+};
+
 
   const ensureContentLayer = (page: any) => {
     page.layers = page.layers || [];
