@@ -2,13 +2,11 @@ import React, { useEffect } from "react";
 import { Routes, Route, useNavigate, Navigate } from "react-router-dom";
 
 import Login from "./pages/Login";
-import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 import Editor from "./pages/Editor";
 import AdminDashboard from "./pages/AdminDashboard";
 
 import { useAuth } from "./store/auth";
-import { useApp } from "./store/app";
 
 function Topbar() {
   const nav = useNavigate();
@@ -27,14 +25,10 @@ function Topbar() {
       <div className="topActions">
         {token ? (
           <>
-            <button className="btn" onClick={() => nav("/")}>
-              Dashboard
-            </button>
+            <button className="btn" onClick={() => nav("/")}>Dashboard</button>
 
             {user?.role === "super_admin" && (
-              <button className="btn" onClick={() => nav("/admin")}>
-                Admin
-              </button>
+              <button className="btn" onClick={() => nav("/admin")}>Admin</button>
             )}
 
             <button
@@ -48,11 +42,7 @@ function Topbar() {
             </button>
           </>
         ) : (
-          <>
-            <button className="btn" onClick={() => nav("/login")}>
-              Entrar
-            </button>
-          </>
+          <button className="btn" onClick={() => nav("/login")}>Entrar</button>
         )}
       </div>
     </div>
@@ -66,22 +56,18 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
-  const { token } = useAuth();
-  const { loadMe } = useAuth();
-  const { loadClubs } = useApp();
+  const { token, loadMe } = useAuth();
 
   useEffect(() => {
     if (!token) return;
     loadMe().catch(() => void 0);
-    loadClubs().catch(() => void 0);
-  }, [token, loadMe, loadClubs]);
+  }, [token, loadMe]);
 
   return (
     <>
       <Topbar />
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
 
         <Route
           path="/"
