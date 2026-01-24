@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, apiUrl } from "../lib/api";
+import { api } from "../lib/api";
 import { useAuth } from "../store/auth";
+import { apiUrl } from "../config";
 
 type Template = { id: string; name: string; origin: string; sport: string; pages: number };
 
