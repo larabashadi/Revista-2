@@ -143,5 +143,5 @@ export function apiUrl(p: string): string {
 export default api;
 
   return config;
-});
+);
 
