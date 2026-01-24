@@ -106,7 +106,10 @@ def import_pdf_to_document(db: Session, club_id: str, pdf_bytes: bytes, mode: st
                 pix_low = None
 
         # Background raster
-        bg_png = _render_page_image(doc, i, scale=2.0)
+        scale = 2.0
+        if preset in ("background", "bg", "raster", "bg_only"):
+            scale = 1.5 if doc.page_count <= 24 else 1.25
+        bg_png = _render_page_image(doc, i, scale=scale)
         bg_asset_id = _mk_asset(db, club_id, bg_png, f"import_bg_p{i+1}")
         created_asset_ids.append(bg_asset_id)
 
@@ -122,6 +125,17 @@ def import_pdf_to_document(db: Session, club_id: str, pdf_bytes: bytes, mode: st
         }
 
         overlay_items: List[Dict[str,Any]] = []
+
+        # If preset requests background-only import, skip heavy text/image extraction.
+        background_only = preset in ("background", "bg", "raster", "bg_only")
+        if background_only:
+            layers=[
+                {"id":"bg","name":"PDF Fondo","visible":True,"locked":True,"items":[bg_item]},
+                {"id":"overlay","name":"Detectado","visible":False,"locked":False,"items":[]},
+            ]
+            pages.append({"id": f"p-{i}", "sectionType":"Imported", "layers": layers})
+            continue
+
 
         # Text extraction
         try:
