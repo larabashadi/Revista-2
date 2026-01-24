@@ -251,7 +251,7 @@ export default function Editor() {
     for (const layer of p.layers || []) {
       for (const it of layer.items || []) {
         if (it.type === "ImageFrame" && it.assetRef && !String(it.assetRef).startsWith("{{")) {
-          urls.add(apiUrl(`/api/assets/file/${it.assetRef}`)));
+          urls.add(apiUrl(`/api/assets/file/${it.assetRef}`));
         }
         if (it.type === "LockedLogoStamp" && lockedLogoId) {
           urls.add(apiUrl(`/api/assets/file/${lockedLogoId}`));
