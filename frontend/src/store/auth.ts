@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { api, setToken } from "../lib/api";
+import { api } from "../lib/api";
 
 type Club = {
   id: string; name: string; sport: string; language: string;
@@ -40,7 +40,7 @@ export const useAuth = create<AuthState>((set, get) => ({
     form.set("password", password);
     const { data } = await api.post("/api/auth/login", form, { headers: { "Content-Type": "application/x-www-form-urlencoded" } });
     localStorage.setItem("token", data.access_token);
-    setToken(data.access_token);
+   
     set({ token: data.access_token });
     await get().loadMe();
     await get().loadClubs();
@@ -48,7 +48,7 @@ export const useAuth = create<AuthState>((set, get) => ({
   register: async (email, password) => {
     const { data } = await api.post("/api/auth/register", { email, password });
     localStorage.setItem("token", data.access_token);
-    setToken(data.access_token);
+    
     set({ token: data.access_token });
     await get().loadMe();
     await get().loadClubs();
@@ -57,7 +57,7 @@ export const useAuth = create<AuthState>((set, get) => ({
     const token = get().token;
     if (!token) { set({ user: null }); return; }
     try {
-      setToken(token);
+     
       const me = await api.get("/api/auth/me");
       set({ user: me.data });
     } catch {
@@ -68,10 +68,10 @@ export const useAuth = create<AuthState>((set, get) => ({
   loadClubs: async () => {
     const { token } = get();
     if (!token) return;
-    setToken(token);
+    
     const { data } = await api.get("/api/clubs");
     set({ clubs: data });
     if (!get().activeClubId && data?.[0]?.id) get().setActiveClub(data[0].id);
   },
-  logout: () => { localStorage.removeItem("token"); localStorage.removeItem("activeClubId"); setToken(null); set({ token: null, user: null, clubs: [], activeClubId: null }); },
+  logout: () => { localStorage.removeItem("token"); localStorage.removeItem("activeClubId"); set({ token: null, user: null, clubs: [], activeClubId: null }); },
 }));
