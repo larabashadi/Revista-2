@@ -21,23 +21,18 @@ import { API_BASE } from "./config";
 
 // Overlay de errores en pantalla (para debug)
 function showFatal(err: any) {
-  const pre = document.createElement("pre");
-  pre.style.position = "fixed";
-  pre.style.inset = "0";
-  pre.style.zIndex = "999999";
-  pre.style.margin = "0";
-  pre.style.padding = "16px";
-  pre.style.overflow = "auto";
-  pre.style.background = "rgba(0,0,0,.92)";
-  pre.style.color = "#fff";
-  pre.style.fontSize = "12px";
-  pre.style.whiteSpace = "pre-wrap";
-  pre.textContent =
-    "FATAL ERROR:\n\n" +
-    (err?.stack || err?.message || String(err)) +
-    "\n\nAPI_BASE=" +
-    API_BASE;
-  document.body.appendChild(pre);
+ const name = err?.name || "Error";
+const message = err?.message || "";
+const cause = err?.cause ? ("\nCAUSE:\n" + (err.cause?.stack || err.cause?.message || String(err.cause))) : "";
+const stack = err?.stack || String(err);
+
+pre.textContent =
+  `FATAL ERROR: ${name}\n\n` +
+  (message ? `MESSAGE:\n${message}\n\n` : "") +
+  `STACK:\n${stack}\n` +
+  cause +
+  `\n\nAPI_BASE=${API_BASE}`;
+
 }
 
 window.addEventListener("error", (e: any) => showFatal(e?.error || e?.message));
