@@ -1,9 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../lib/api";
+import { api, apiUrl } from "../lib/api";
 import { useAuth } from "../store/auth";
-import { apiUrl } from "../config";
-
 
 type Template = { id: string; name: string; origin: string; sport: string; pages: number };
 
@@ -82,22 +80,26 @@ export default function Dashboard() {
   async function createProjectFromTemplate(templateId: string, name: string) {
     if (!activeClubId) {
       setToast("Primero crea/selecciona un club");
-      setTimeout(()=>setToast(null), 2500);
+      setTimeout(() => setToast(null), 2500);
       return;
     }
     try {
+      setToast("Creando proyecto...");
       const { data } = await api.post(`/api/projects/${activeClubId}`, { template_id: templateId, name });
-      nav(`/editor/${data.id}`);
+      const projectId = (data as any)?.id || (data as any)?.project_id;
+      if (!projectId) throw new Error("Project id missing");
+      setToast(null);
+      nav(`/editor/${projectId}`);
     } catch (e: any) {
-      setToast(e?.response?.data?.detail || "No se pudo crear el proyecto");
-      setTimeout(()=>setToast(null), 2500);
+      setToast(e?.response?.data?.detail || e?.message || "No se pudo crear el proyecto");
+      setTimeout(() => setToast(null), 3500);
     }
   }
 
   async function importPdf(mode: string) {
     if (!activeClubId) {
       setToast("Primero crea/selecciona un club");
-      setTimeout(()=>setToast(null), 2500);
+      setTimeout(() => setToast(null), 2500);
       return;
     }
     const input = document.createElement("input");
@@ -109,12 +111,20 @@ export default function Dashboard() {
       const fd = new FormData();
       fd.append("file", file);
       try {
-        // Import background only; text/images are detected on-demand per page inside the editor
-        const { data } = await api.post(`/api/import/${activeClubId}?mode=${mode}&preset=background`, fd);
-        nav(`/editor/${data.project_id}`);
+        setToast("Importando PDF... (puede tardar)");
+        // PDF import can take a while (render pages -> images). Disable timeout.
+        const { data } = await api.post(
+          `/api/import/${activeClubId}?mode=${mode}&preset=background`,
+          fd,
+          { timeout: 0, headers: { "Content-Type": "multipart/form-data" } }
+        );
+        const projectId = (data as any)?.project_id || (data as any)?.id;
+        if (!projectId) throw new Error("project_id missing");
+        setToast(null);
+        nav(`/editor/${projectId}`);
       } catch (e: any) {
-        setToast(e?.response?.data?.detail || "No se pudo importar el PDF");
-        setTimeout(()=>setToast(null), 3500);
+        setToast(e?.response?.data?.detail || e?.message || "No se pudo importar el PDF");
+        setTimeout(() => setToast(null), 4000);
       }
     };
     input.click();
@@ -333,7 +343,7 @@ export default function Dashboard() {
                   <div style={{ fontWeight: 900, marginBottom: 10, color: "var(--muted)" }}>Página {p + 1}</div>
                   <div style={{ borderRadius: 14, overflow: "hidden", border: "1px solid var(--border)" }}>
                     <img
-                      src={`/api/templates/${previewTemplate.id}/thumbnail?page=${p}&size=720`}
+                      src={apiUrl(`/api/templates/${previewTemplate.id}/thumbnail?page=${p}&size=720`)}
                       alt={`Preview page ${p + 1}`}
                       style={{ width: "100%", display: "block" }}
                       loading="lazy"
