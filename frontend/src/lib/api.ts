@@ -21,3 +21,29 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   }
   return config;
 });
+const pushNet = (x: any) => {
+  const w = window as any;
+  w.__netlog__ = w.__netlog__ || [];
+  w.__netlog__.push({ t: Date.now(), ...x });
+};
+
+api.interceptors.request.use((config) => {
+  pushNet({ kind: "REQ", url: `${config.baseURL || ""}${config.url || ""}` });
+  return config;
+});
+
+api.interceptors.response.use(
+  (res) => {
+    pushNet({ kind: "RES", url: `${res.config.baseURL || ""}${res.config.url || ""}`, status: res.status });
+    return res;
+  },
+  (err) => {
+    pushNet({
+      kind: "ERR",
+      url: `${err?.config?.baseURL || ""}${err?.config?.url || ""}`,
+      status: err?.response?.status,
+      msg: err?.message,
+    });
+    return Promise.reject(err);
+  }
+);
