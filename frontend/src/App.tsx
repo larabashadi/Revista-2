@@ -1,92 +1,117 @@
-import React from "react";
-import { BrowserRouter, Routes, Route, Navigate, Link } from "react-router-dom";
-const { token, user, logout } = useAuth();
-import Login from "./pages/Login";
+import React, { useEffect } from "react";
+import { Routes, Route, useNavigate, Navigate } from "react-router-dom";
 
+import Login from "./pages/Login";
+import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 import Editor from "./pages/Editor";
 import AdminDashboard from "./pages/AdminDashboard";
-{token ? (
-  <>
-    <button className="btn" onClick={() => nav("/")}>Dashboard</button>
 
-    {user?.role === "super_admin" && (
-      <button className="btn" onClick={() => nav("/admin")}>Admin</button>
-    )}
+import { useAuth } from "./store/auth";
+import { useApp } from "./store/app";
 
-    <button className="btn danger" onClick={() => { logout(); nav("/login"); }}>
-      Salir
-    </button>
-  </>
-) : (
-  <button className="btn" onClick={() => nav("/login")}>Entrar</button>
-)}
-useEffect(() => {
-  if (!token) return;
-  loadMe().catch(() => void 0);
-  loadClubs().catch(() => void 0);
-}, [token]);
+function Topbar() {
+  const nav = useNavigate();
+  const { token, user, logout } = useAuth();
 
-export default function App() {
   return (
-    
-      <div style={{ minHeight: "100vh", background: "#0b1020", color: "#fff" }}>
-        <TopNav />
-        <Routes>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/login" element={<Login />} />
-         
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/editor/:magazineId" element={<Editor />} />
-          <Route path="/admin" element={<AdminDashboard />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+    <div className="topbar">
+      <div className="brand" onClick={() => nav("/")}>
+        <div className="logoDot" />
+        <div>
+          <div className="brandTitle">Sports Magazine SaaS</div>
+          <div className="brandSub">Editor de revistas</div>
+        </div>
       </div>
-   
-  );
-}
 
+      <div className="topActions">
+        {token ? (
+          <>
+            <button className="btn" onClick={() => nav("/")}>
+              Dashboard
+            </button>
 
-function TopNav() {
-  return (
-    <div
-      style={{
-        position: "sticky",
-        top: 0,
-        zIndex: 20,
-        background: "rgba(11,16,32,0.8)",
-        backdropFilter: "blur(10px)",
-        borderBottom: "1px solid rgba(255,255,255,0.10)",
-      }}
-    >
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "12px 16px", display: "flex", gap: 12, alignItems: "center" }}>
-        <div style={{ fontWeight: 800, letterSpacing: 0.4 }}>Sports Magazine SaaS</div>
-        <div style={{ flex: 1 }} />
-        <NavLink to="/dashboard">Dashboard</NavLink>
-        <NavLink to="/admin">Admin</NavLink>
-        <NavLink to="/login">Login</NavLink>
+            {user?.role === "super_admin" && (
+              <button className="btn" onClick={() => nav("/admin")}>
+                Admin
+              </button>
+            )}
+
+            <button
+              className="btn danger"
+              onClick={() => {
+                logout();
+                nav("/login");
+              }}
+            >
+              Salir
+            </button>
+          </>
+        ) : (
+          <>
+            <button className="btn" onClick={() => nav("/login")}>
+              Entrar
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
 }
 
-function NavLink({ to, children }: { to: string; children: React.ReactNode }) {
-  return (
-    <Link
-      to={to}
-      style={{
-        textDecoration: "none",
-        color: "rgba(255,255,255,0.90)",
-        padding: "6px 10px",
-        borderRadius: 10,
-        border: "1px solid rgba(255,255,255,0.10)",
-      }}
-    >
-      {children}
-    </Link>
-  );
+function PrivateRoute({ children }: { children: React.ReactNode }) {
+  const { token } = useAuth();
+  if (!token) return <Navigate to="/login" replace />;
+  return <>{children}</>;
 }
 
-function NotFound() {
-  return <div style={{ padding: 24 }}>404</div>;
+export default function App() {
+  const { token } = useAuth();
+  const { loadMe } = useAuth();
+  const { loadClubs } = useApp();
+
+  useEffect(() => {
+    if (!token) return;
+    loadMe().catch(() => void 0);
+    loadClubs().catch(() => void 0);
+  }, [token, loadMe, loadClubs]);
+
+  return (
+    <>
+      <Topbar />
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
+
+        <Route
+          path="/"
+          element={
+            <PrivateRoute>
+              <Dashboard />
+            </PrivateRoute>
+          }
+        />
+
+        <Route
+          path="/editor/:projectId"
+          element={
+            <PrivateRoute>
+              <Editor />
+            </PrivateRoute>
+          }
+        />
+
+        <Route
+          path="/admin"
+          element={
+            <PrivateRoute>
+              <AdminDashboard />
+            </PrivateRoute>
+          }
+        />
+
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </>
+  );
 }
