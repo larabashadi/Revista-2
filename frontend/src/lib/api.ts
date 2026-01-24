@@ -4,7 +4,13 @@ import axios from "axios";
 // - In dev, Vite proxies `/api` to the backend (see vite.config.ts).
 // - In builds without a dev proxy, set VITE_API_BASE (e.g. http://localhost:8000)
 //   so requests still work.
-const baseURL = (import.meta as any)?.env?.VITE_API_BASE || "";
+const env = (import.meta as any)?.env ?? {};
+const baseURL = String(
+  env.VITE_API_BASE ||
+  env.VITE_API_BASE ||
+  "https://revista-2-1.onrender.com"   // <-- tu backend
+).replace(/\/+$/, "");
+
 
 export const api = axios.create({
   baseURL,
