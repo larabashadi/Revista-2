@@ -17,6 +17,13 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import "./styles.css";
+import { API_BASE } from "./config";
+...
+pre.textContent =
+  "FATAL ERROR:\n\n" +
+  (err?.stack || err?.message || String(err)) +
+  "\n\nAPI_BASE=" + API_BASE;
+
 
 // Muestra errores en pantalla (por si la consola no los enseña)
 function showFatal(err: any) {
