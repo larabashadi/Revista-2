@@ -25,6 +25,21 @@ export default function App() {
    
   );
 }
+{token ? (
+  <>
+    <button className="btn" onClick={() => nav("/")}>Dashboard</button>
+
+    {user?.role === "super_admin" && (
+      <button className="btn" onClick={() => nav("/admin")}>Admin</button>
+    )}
+
+    <button className="btn danger" onClick={() => { logout(); nav("/login"); }}>
+      Salir
+    </button>
+  </>
+) : (
+  <button className="btn" onClick={() => nav("/login")}>Entrar</button>
+)}
 
 function TopNav() {
   return (
