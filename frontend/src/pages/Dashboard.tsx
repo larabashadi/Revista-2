@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../store/auth";
+import { apiUrl } from "../config";
+
 
 type Template = { id: string; name: string; origin: string; sport: string; pages: number };
 
@@ -266,7 +268,7 @@ export default function Dashboard() {
             <div key={t.id} className="card">
               <div className="templatePreview" style={{cursor:"pointer"}} onClick={()=>setPreviewTemplate(t)}>
                 <img
-                  src={`/api/templates/${t.id}/thumbnail?page=0&size=480`}
+                  src={apiUrl(`/api/templates/${t.id}/thumbnail?page=0&size=480`)}
                   alt={`Preview ${t.name}`}
                   loading="lazy"
                 />
