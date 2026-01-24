@@ -1,4 +1,11 @@
 import axios from "axios";
+import axios from "axios";
+import { API_BASE } from "../config";
+
+export const api = axios.create({
+  baseURL: API_BASE,
+  withCredentials: false,
+});
 
 // NOTE
 // - In dev, Vite proxies `/api` to the backend (see vite.config.ts).
