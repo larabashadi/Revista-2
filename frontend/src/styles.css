@@ -9,6 +9,8 @@
   --accent:#2563eb;
   --danger:#dc2626;
   --shadow:0 12px 30px rgba(0,0,0,.10);
+    --panel: rgba(255,255,255,.75);
+  --border: rgba(17,24,39,.12);
 }
 *{box-sizing:border-box}
 html,body{height:100%}
