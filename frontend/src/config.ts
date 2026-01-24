@@ -17,3 +17,4 @@ export const apiUrl = (path: string) => {
   if (/^https?:\/\//i.test(path)) return path;
   return `${API_BASE}${path.startsWith("/") ? "" : "/"}${path}`;
 };
+
