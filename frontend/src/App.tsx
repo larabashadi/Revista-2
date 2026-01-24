@@ -6,6 +6,26 @@ import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Editor from "./pages/Editor";
 import AdminDashboard from "./pages/AdminDashboard";
+{token ? (
+  <>
+    <button className="btn" onClick={() => nav("/")}>Dashboard</button>
+
+    {user?.role === "super_admin" && (
+      <button className="btn" onClick={() => nav("/admin")}>Admin</button>
+    )}
+
+    <button className="btn danger" onClick={() => { logout(); nav("/login"); }}>
+      Salir
+    </button>
+  </>
+) : (
+  <button className="btn" onClick={() => nav("/login")}>Entrar</button>
+)}
+useEffect(() => {
+  if (!token) return;
+  loadMe().catch(() => void 0);
+  loadClubs().catch(() => void 0);
+}, [token]);
 
 export default function App() {
   return (
@@ -25,21 +45,7 @@ export default function App() {
    
   );
 }
-{token ? (
-  <>
-    <button className="btn" onClick={() => nav("/")}>Dashboard</button>
 
-    {user?.role === "super_admin" && (
-      <button className="btn" onClick={() => nav("/admin")}>Admin</button>
-    )}
-
-    <button className="btn danger" onClick={() => { logout(); nav("/login"); }}>
-      Salir
-    </button>
-  </>
-) : (
-  <button className="btn" onClick={() => nav("/login")}>Entrar</button>
-)}
 
 function TopNav() {
   return (
