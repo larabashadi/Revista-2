@@ -1,79 +1,48 @@
-/*import axios from "axios";
-import type { InternalAxiosRequestConfig } from "axios";
-import { API_BASE } from "../config";
-import { useAuth } from "../store/auth";
-
-export const api = axios.create({
-  baseURL: API_BASE,
-  withCredentials: false,
-});
-
-api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  const token = (useAuth as any).getState?.()?.token;
-  if (token) {
-    // Axios v1 usa AxiosHeaders internamente; set() es lo correcto
-    if (config.headers && typeof (config.headers as any).set === "function") {
-      (config.headers as any).set("Authorization", `Bearer ${token}`);
-    } else {
-      (config.headers as any) = config.headers ?? {};
-      (config.headers as any)["Authorization"] = `Bearer ${token}`;
-    }
-  }
-  return config;
-});
-const pushNet = (x: any) => {
-  const w = window as any;
-  w.__netlog__ = w.__netlog__ || [];
-  w.__netlog__.push({ t: Date.now(), ...x });
-};
-
-api.interceptors.request.use((config) => {
-  pushNet({ kind: "REQ", url: `${config.baseURL || ""}${config.url || ""}` });
-  return config;
-});
-
-api.interceptors.response.use(
-  (res) => {
-    pushNet({ kind: "RES", url: `${res.config.baseURL || ""}${res.config.url || ""}`, status: res.status });
-    return res;
-  },
-  (err) => {
-    pushNet({
-      kind: "ERR",
-      url: `${err?.config?.baseURL || ""}${err?.config?.url || ""}`,
-      status: err?.response?.status,
-      msg: err?.message,
-    });
-    return Promise.reject(err);
-  }
-);*/
 import axios from "axios";
 import type { InternalAxiosRequestConfig } from "axios";
 import { API_BASE } from "../config";
-import { useAuth } from "../store/auth";
+
+// NOTE
+// - In dev, Vite proxies `/api` to the backend (see vite.config.ts).
+// - In production builds on Render, set VITE_API_BASE (e.g. https://<backend>.onrender.com)
+//   so requests go to the API domain.
+const baseURL = API_BASE || "";
+
+// Store token under sms_token (and legacy token key for back-compat).
+export function setToken(token: string | null) {
+  if (typeof window === "undefined") return;
+  if (token) {
+    localStorage.setItem("sms_token", token);
+    localStorage.setItem("token", token);
+  } else {
+    localStorage.removeItem("sms_token");
+    localStorage.removeItem("token");
+  }
+}
+
+export function getToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem("sms_token") || localStorage.getItem("token");
+}
 
 export const api = axios.create({
-  baseURL: API_BASE,
+  baseURL,
+  // Long operations (PDF import/export) can take time on Render. We override per-request too.
+  timeout: 30000,
   withCredentials: false,
-  timeout: 0, // import/export pueden tardar
 });
 
-// Añade token si existe
+// Attach Authorization header if we have a token
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  const token = (useAuth as any).getState?.()?.token;
-
+  const token = getToken();
   if (token) {
-    // Axios v1 usa AxiosHeaders internamente
     if ((config.headers as any)?.set) {
       (config.headers as any).set("Authorization", `Bearer ${token}`);
     } else {
       (config.headers as any) = { ...(config.headers as any), Authorization: `Bearer ${token}` };
     }
   }
-
   return config;
 });
 
 export default api;
-
-
