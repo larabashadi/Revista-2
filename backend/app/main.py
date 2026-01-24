@@ -28,13 +28,15 @@ logger = logging.getLogger("magazine")
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Sports Magazine SaaS", version="10.4.12")
-    app.add_middleware(
+        app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["Content-Disposition"],
     )
+
 
     @app.on_event("startup")
     def _startup() -> None:
