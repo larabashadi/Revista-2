@@ -3,6 +3,8 @@ import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../store/auth";
 import { Stage, Layer, Rect, Text, Image as KImage, Transformer, Group } from "react-konva";
+import { apiUrl } from "../config";
+
 
 const A4_W = 595.2756;
 const A4_H = 841.8898;
