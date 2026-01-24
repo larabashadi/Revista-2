@@ -1,23 +1,41 @@
 from __future__ import annotations
+
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
-from rq import Queue
-import redis
 
 from app.core.db import get_db
-from app.core.settings import settings
 from app.api.deps import get_current_user, get_club_plan, get_club_or_404
 from app.models.models import Project, Club
 from app.schemas.schemas import ExportRequest
-from app.jobs import export_project_job
 from app.services.storage import get_local_path
 from app.services.pdf_exporter import export_document_to_pdf
-import json
+
+# Optional queue (RQ/Redis). In many free hosting setups (Render free), you won't
+# run a Redis instance or a worker, so we keep export working via /sync.
+try:
+    from rq import Queue  # type: ignore
+    import redis  # type: ignore
+    from app.core.settings import settings
+
+    _redis_conn = None
+    _q = None
+    if getattr(settings, "REDIS_URL", None):
+        try:
+            _redis_conn = redis.from_url(settings.REDIS_URL)
+            _q = Queue("default", connection=_redis_conn)
+        except Exception:
+            _q = None
+except Exception:
+    _q = None
+
+# If queue exists, we can enqueue background jobs
+if _q is not None:
+    from app.jobs import export_project_job  # imported only when queue is usable
 
 router = APIRouter(prefix="/api/export", tags=["export"])
-redis_conn = redis.from_url(settings.REDIS_URL)
-q = Queue("default", connection=redis_conn)
 
 
 def _safe_filename(name: str) -> str:
@@ -25,7 +43,6 @@ def _safe_filename(name: str) -> str:
     name = (name or "").strip()
     if not name:
         return "Club"
-    # Keep letters, numbers, dash, underscore and space. Convert others to underscore.
     out = []
     for ch in name:
         if ch.isalnum() or ch in "-_ ":
@@ -33,56 +50,77 @@ def _safe_filename(name: str) -> str:
         else:
             out.append("_")
     s = "".join(out).strip().replace(" ", "_")
-    # Avoid empty / pathological names
     return s[:80] or "Club"
 
+
 @router.post("/{project_id}")
-def export_project(project_id: str, payload: ExportRequest, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def export_project(
+    project_id: str,
+    payload: ExportRequest,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Queue export if Redis/RQ is available. Otherwise instruct to use /sync."""
+    if _q is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Export queue not available. Use POST /api/export/sync/{project_id}.",
+        )
+
     proj = db.get(Project, project_id)
     if not proj:
         raise HTTPException(status_code=404, detail="Project not found")
+
     club = get_club_or_404(db, proj.club_id)
     if club.owner_id != user.id:
         raise HTTPException(status_code=403, detail="Forbidden")
+
     plan = get_club_plan(db, club.id)
     watermark = True if plan != "pro" else False
-    # allow demo export with watermark for free (conversion-friendly)
+
     body = payload.model_dump()
     body["watermark"] = watermark
-    job = q.enqueue(export_project_job, proj.id, club.id, body, settings.DATABASE_URL, job_timeout=300)
+
+    # job_timeout in seconds
+    job = _q.enqueue(export_project_job, proj.id, club.id, body, job_timeout=300)
     return {"job_id": job.get_id(), "watermark": watermark, "plan": plan}
 
 
-# Fallback: synchronous export (no worker/queue). Useful if the RQ worker is not running.
 @router.post("/sync/{project_id}")
-def export_project_sync(project_id: str, payload: ExportRequest, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def export_project_sync(
+    project_id: str,
+    payload: ExportRequest,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Synchronous export (no worker/queue)."""
     proj = db.get(Project, project_id)
     if not proj:
         raise HTTPException(status_code=404, detail="Project not found")
+
     club = get_club_or_404(db, proj.club_id)
     if club.owner_id != user.id:
         raise HTTPException(status_code=403, detail="Forbidden")
+
     plan = get_club_plan(db, club.id)
     watermark = True if plan != "pro" else False
 
     doc = json.loads(proj.document_json)
-    # The exporter is DB-aware (it resolves Asset ids to local paths).
-    # Older iterations passed a resolver callback + print options (bleed/crop).
-    # In this codebase we keep the signature minimal and ignore bleed/crop for now.
+
     pdf_bytes = export_document_to_pdf(
         db,
         doc,
         quality=payload.quality,
         watermark=watermark,
     )
-    # Lock templates on first export (per club)
-    club = db.get(Club, project.club_id)
-    if club and not getattr(club, "templates_locked", False):
-        club.templates_locked = True
-        club.chosen_template_id = project.template_id
-        db.add(club)
-        db.commit()
 
+    # Lock templates on first export (per club)
+    club_obj = db.get(Club, proj.club_id)
+    if club_obj and not getattr(club_obj, "templates_locked", False):
+        club_obj.templates_locked = True
+        club_obj.chosen_template_id = proj.template_id
+        db.add(club_obj)
+        db.commit()
 
     filename = f"Revista_{_safe_filename(club.name)}.pdf"
     return Response(
@@ -91,22 +129,25 @@ def export_project_sync(project_id: str, payload: ExportRequest, db: Session = D
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
+
 @router.get("/job/{job_id}")
 def export_status(job_id: str):
-    job = q.fetch_job(job_id)
+    if _q is None:
+        raise HTTPException(status_code=503, detail="Export queue not available")
+    job = _q.fetch_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.is_failed:
-        return {"status":"failed", "error": str(job.exc_info)}
+        return {"status": "failed", "error": str(job.exc_info)}
     if job.is_finished:
-        return {"status":"finished", **(job.result or {})}
-    return {"status":"queued"}
+        return {"status": "finished", **(job.result or {})}
+    return {"status": "queued"}
 
 
-# Backwards-compatible alias (older frontend builds polled /status/{job_id})
 @router.get("/status/{job_id}")
 def export_status_alias(job_id: str):
     return export_status(job_id)
+
 
 @router.get("/download/{asset_id}")
 def download_export(asset_id: str, filename: str | None = Query(default=None)):
