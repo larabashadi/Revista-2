@@ -49,44 +49,15 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
 */
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { HashRouter } from "react-router-dom";
+import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import "./styles.css";
-import { ErrorBoundary } from "./ErrorBoundary";
-const w = window as any;
-w.__netlog__ = w.__netlog__ || [];
-const pushNet = (x: any) => w.__netlog__.push({ t: Date.now(), ...x });
 
-pushNet({ kind: "BOOT", msg: "main.tsx start" });
-
-// Log de fetch (por si la app usa fetch y no axios)
-const _fetch = window.fetch.bind(window);
-window.fetch = async (input: any, init?: any) => {
-  const url =
-    typeof input === "string"
-      ? input
-      : input?.url
-      ? input.url
-      : String(input);
-
-  pushNet({ kind: "FETCH", url });
-  try {
-    const res = await _fetch(input, init);
-    pushNet({ kind: "FETCH_RES", url, status: res.status });
-    return res;
-  } catch (e: any) {
-    pushNet({ kind: "FETCH_ERR", url, msg: e?.message || String(e) });
-    throw e;
-  }
-};
-
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <ErrorBoundary>
-      <HashRouter>
-        <App />
-      </HashRouter>
-    </ErrorBoundary>
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>
   </React.StrictMode>
 );
 
