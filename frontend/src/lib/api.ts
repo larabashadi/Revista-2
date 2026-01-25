@@ -1,61 +1,47 @@
-import axios, { AxiosError, InternalAxiosRequestConfig } from "axios";
+import axios, { InternalAxiosRequestConfig } from "axios";
 
-const rawBase = (import.meta.env.VITE_API_BASE || "").toString().trim();
+/**
+ * IMPORTANT:
+ * - En Render debes definir VITE_API_BASE como la URL del BACKEND (sin /api)
+ *   Ej: https://revista-2-1.onrender.com
+ * - Este archivo añade /api automáticamente.
+ */
+const RAW_BASE =
+  (import.meta as any).env?.VITE_API_BASE?.toString?.().trim?.() || "";
 
-// Base del backend (SIN /api). Ej: https://revista-2-1.onrender.com
-export const API_BASE = rawBase.replace(/\/+$/, "") || window.location.origin;
+export const apiBase = (() => {
+  const base = RAW_BASE.replace(/\/+$/, "");
+  if (!base) return "/api"; // fallback (útil si sirves front+back en el mismo dominio)
+  return `${base}/api`;
+})();
 
-// Mantengo este nombre porque en tu proyecto lo usan en varias partes
-export const apiUrl = API_BASE;
+export const apiUrl = apiBase; // alias por compatibilidad con imports antiguos
 
-let _token: string | null = null;
+export const api = axios.create({
+  baseURL: apiBase,
+  timeout: 120000,
+});
 
-export function setToken(token: string | null) {
-  _token = token;
-  if (token) localStorage.setItem("token", token);
+let _token: string | null = localStorage.getItem("token");
+
+export function setToken(t: string | null) {
+  _token = t;
+  if (t) localStorage.setItem("token", t);
   else localStorage.removeItem("token");
 }
 
-// Normaliza rutas para que TODAS acaben en /api/...
-function normalizeUrl(url: string): string {
-  if (!url) return "/api";
-  if (/^https?:\/\//i.test(url)) return url;
-
-  let u = url.startsWith("/") ? url : `/${url}`;
-
-  // Atajos (por si algún sitio llama /me o /login sin prefijos)
-  if (u === "/me") return "/api/auth/me";
-  if (u === "/login") return "/api/auth/login";
-  if (u === "/register") return "/api/auth/register";
-
-  // Si ya viene /api/... lo dejamos
-  if (u.startsWith("/api/")) return u;
-
-  // Si no, lo prefijamos
-  return `/api${u}`;
+export function getToken() {
+  return _token ?? localStorage.getItem("token");
 }
 
-export const api = axios.create({
-  baseURL: API_BASE,
-  timeout: 180000, // PDFs grandes / export puede tardar
-});
-
+// Request interceptor: añade Authorization sin romper typings de Axios 1.x
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  if (typeof config.url === "string") {
-    config.url = normalizeUrl(config.url);
-  }
-
-  const token = _token ?? localStorage.getItem("token");
-  if (token) {
-    config.headers = (config.headers ?? {}) as any;
-    (config.headers as any)["Authorization"] = `Bearer ${token}`;
+  const t = getToken();
+  if (t) {
+    config.headers = config.headers ?? ({} as any);
+    (config.headers as any).Authorization = `Bearer ${t}`;
   }
   return config;
 });
-
-api.interceptors.response.use(
-  (res) => res,
-  (err: AxiosError) => Promise.reject(err)
-);
 
 export default api;
