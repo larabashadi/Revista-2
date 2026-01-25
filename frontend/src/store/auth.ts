@@ -1,77 +1,96 @@
+// frontend/src/store/auth.ts
 import { create } from "zustand";
-import { api } from "../lib/api";
+import api, { setToken, getToken } from "../lib/api";
 
-type Club = {
-  id: string; name: string; sport: string; language: string;
-  primary_color: string; secondary_color: string;
-  font_primary: string; font_secondary: string;
-  locked_logo_asset_id?: string | null;
-  plan: "free" | "pro";
+export type User = {
+  id: number;
+  email: string;
+  role: string;
 };
 
-type User = {
-  id: string;
-  email: string;
-  role?: "user" | "super_admin";
+export type Club = {
+  id: number;
+  name: string;
+  // backend usa snake_case
+  locked_logo_asset_id?: string | null;
 };
 
 type AuthState = {
   token: string | null;
   user: User | null;
   clubs: Club[];
-  activeClubId: string | null;
-  setActiveClub: (id: string) => void;
-  login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<void>;
+  isReady: boolean;
+
+  login: (email: string, password: string) => Promise<User>;
+  logout: () => void;
+
   loadMe: () => Promise<void>;
   loadClubs: () => Promise<void>;
-  logout: () => void;
+  init: () => Promise<void>;
 };
 
 export const useAuth = create<AuthState>((set, get) => ({
-  token: localStorage.getItem("token"),
+  token: getToken(),
   user: null,
   clubs: [],
-  activeClubId: localStorage.getItem("activeClubId"),
-  setActiveClub: (id) => { localStorage.setItem("activeClubId", id); set({ activeClubId: id }); },
-  login: async (email, password) => {
-    const form = new URLSearchParams();
-    form.set("username", email);
-    form.set("password", password);
-    const { data } = await api.post("/api/auth/login", form, { headers: { "Content-Type": "application/x-www-form-urlencoded" } });
-    localStorage.setItem("token", data.access_token);
-   
-    set({ token: data.access_token });
+  isReady: false,
+
+  async login(email: string, password: string) {
+    // FastAPI OAuth2PasswordRequestForm => x-www-form-urlencoded con "username"
+    const body = new URLSearchParams();
+    body.set("username", email);
+    body.set("password", password);
+
+    const res = await api.post("/auth/login", body, {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
+
+    const token = (res.data as any)?.access_token;
+    if (!token) throw new Error("Login: no se recibió access_token");
+
+    setToken(token);
+    set({ token });
+
+    // Carga perfil
     await get().loadMe();
     await get().loadClubs();
-  },
-  register: async (email, password) => {
-    const { data } = await api.post("/api/auth/register", { email, password });
-    localStorage.setItem("token", data.access_token);
-    
-    set({ token: data.access_token });
-    await get().loadMe();
-    await get().loadClubs();
-  },
-  loadMe: async () => {
-    const token = get().token;
-    if (!token) { set({ user: null }); return; }
-    try {
-     
-      const me = await api.get("/api/auth/me");
-      set({ user: me.data });
-    } catch {
-      set({ user: null });
-    }
+
+    const u = get().user;
+    if (!u) throw new Error("Login: no se pudo cargar el usuario");
+    return u;
   },
 
-  loadClubs: async () => {
-    const { token } = get();
-    if (!token) return;
-    
-    const { data } = await api.get("/api/clubs");
-    set({ clubs: data });
-    if (!get().activeClubId && data?.[0]?.id) get().setActiveClub(data[0].id);
+  logout() {
+    setToken(null);
+    set({ token: null, user: null, clubs: [], isReady: true });
   },
-  logout: () => { localStorage.removeItem("token"); localStorage.removeItem("activeClubId"); set({ token: null, user: null, clubs: [], activeClubId: null }); },
+
+  async loadMe() {
+    const token = get().token ?? getToken();
+    if (!token) return;
+
+    const me = await api.get("/auth/me");
+    set({ user: me.data });
+  },
+
+  async loadClubs() {
+    const token = get().token ?? getToken();
+    if (!token) return;
+
+    const { data } = await api.get("/clubs");
+    set({ clubs: Array.isArray(data) ? data : [] });
+  },
+
+  async init() {
+    try {
+      const token = getToken();
+      if (token) {
+        set({ token });
+        await get().loadMe();
+        await get().loadClubs();
+      }
+    } finally {
+      set({ isReady: true });
+    }
+  },
 }));
