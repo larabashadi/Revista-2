@@ -44,7 +44,7 @@ def detect_page(
     with open(pdf_path, "rb") as f:
         pdf_bytes = f.read()
 
-    detected = detect_pdf_page_overlays(pdf_bytes=pdf_bytes, page_index=page_index)
+    detected = detect_pdf_page_overlays(db=db, club_id=proj.club_id, pdf_bytes=pdf_bytes, page_index=page_index)
     # Persist detected overlays into the project document
     page = pages[page_index]
     page.setdefault("detected", {})
