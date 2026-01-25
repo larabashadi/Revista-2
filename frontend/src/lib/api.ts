@@ -1,56 +1,74 @@
-import axios from "axios";
+import axios, {
+  type AxiosInstance,
+  type AxiosResponse,
+  type InternalAxiosRequestConfig,
+} from "axios";
 
-// NOTE
-// - In dev, Vite proxies `/api` to the backend (see vite.config.ts).
-// - In builds without a dev proxy, set VITE_API_BASE (e.g. http://localhost:8000)
-//   so requests still work.
-const baseURL = (import.meta as any)?.env?.VITE_API_BASE || "";
-export const apiUrl = (baseURL || "").replace(/\/$/, "");
-
-export const api = axios.create({
-  baseURL,
-  timeout: 30000,
-});
-
-// Keep a single source of truth for auth tokens.
-// We store the token under `sms_token` (Sports Magazine SaaS token).
-// Some older builds used `token`; we keep backward compatibility.
-export function setToken(token: string | null) {
-  if (typeof window === "undefined") return;
-  if (token) {
-    localStorage.setItem("sms_token", token);
-    // Back-compat: keep the legacy key in sync
-    localStorage.setItem("token", token);
-  } else {
-    localStorage.removeItem("sms_token");
-    localStorage.removeItem("token");
-  }
+/**
+ * Normaliza la base del backend:
+ * - quita espacios
+ * - quita trailing slash
+ * - si te pasan .../api, lo deja en ... (para evitar /api/api)
+ */
+function normalizeBase(raw: string): string {
+  let b = String(raw || "").trim();
+  if (!b) return "";
+  b = b.replace(/\/+$/, "");
+  if (b.endsWith("/api")) b = b.slice(0, -4);
+  return b;
 }
 
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("sms_token") || localStorage.getItem("token");
-  if (token) {
-    config.headers = config.headers || {};
-    (config.headers as any).Authorization = `Bearer ${token}`;
+export const API_BASE: string = normalizeBase((import.meta as any)?.env?.VITE_API_BASE);
+
+/** Une API_BASE + path cuidando slashes. */
+export function apiUrl(path: string = ""): string {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  if (!API_BASE) return p; // fallback: dev/proxy
+  return `${API_BASE}${p}`;
+}
+
+const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 min (import PDF puede tardar)
+
+/**
+ * Axios instance usado en todo el frontend.
+ * Importante: los endpoints del backend empiezan por /api/...
+ */
+export const api: AxiosInstance = axios.create({
+  baseURL: API_BASE || "",
+  timeout: DEFAULT_TIMEOUT_MS,
+});
+
+const TOKEN_KEY = "token";
+export function getToken(): string {
+  return localStorage.getItem(TOKEN_KEY) || "";
+}
+export function setToken(token: string) {
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+export function clearToken() {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+/**
+ * Interceptor: adjunta Authorization.
+ * FIX TS2322: NO reasignar headers tipado a {} directamente.
+ */
+api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+  const t = getToken();
+  if (t) {
+    const headers: any = (config.headers ?? {}) as any;
+    headers["Authorization"] = `Bearer ${t}`;
+    config.headers = headers;
   }
   return config;
 });
 
-api.interceptors.response.use(
-  (res) => res,
-  (err) => {
-    const status = err?.response?.status;
-    if (status === 401) {
-      localStorage.removeItem("sms_token");
-      localStorage.removeItem("token");
-      localStorage.removeItem("sms_user");
-      if (typeof window !== "undefined" && window.location.pathname !== "/login") {
-        window.location.href = "/login";
-      }
-    }
-    return Promise.reject(err);
-  }
-);
+/** Helper opcional para obtener data directamente. */
+export async function unwrap<T>(p: Promise<AxiosResponse<T>>): Promise<T> {
+  const r = await p;
+  return r.data;
+}
 
-// Some pages import the API client as default; keep this for compatibility.
+// compat: algunos archivos hacen `import api from "../lib/api"`
 export default api;
