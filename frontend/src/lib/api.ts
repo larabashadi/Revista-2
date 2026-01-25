@@ -1,69 +1,56 @@
-import axios, { AxiosHeaders, InternalAxiosRequestConfig } from "axios";
+import axios from "axios";
 
-/**
- * API base URL. In Render you usually set VITE_API_BASE to the BACKEND url:
- *   https://<your-backend>.onrender.com
- *
- * Some users accidentally set it to .../api . To be resilient, we auto-rewrite
- * requests that start with /api when baseURL already ends with /api.
- */
-const RAW_BASE = ((import.meta as any).env?.VITE_API_BASE as string) || "";
-const BASE = (RAW_BASE || "").trim().replace(/\/+$/, "");
-
-export const API_BASE = BASE;
-
-/** Build an absolute URL pointing to the backend (useful for thumbnails/assets). */
-export function apiUrl(path: string): string {
-  if (!path) return BASE;
-  if (!BASE) return path;
-  if (/^https?:\/\//i.test(path)) return path;
-  if (path.startsWith("/")) return `${BASE}${path}`;
-  return `${BASE}/${path}`;
-}
-
-const TOKEN_KEY = "token";
-
-export function getToken(): string | null {
-  try {
-    return localStorage.getItem(TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export function setToken(token: string | null) {
-  try {
-    if (token) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    // ignore
-  }
-}
+// NOTE
+// - In dev, Vite proxies `/api` to the backend (see vite.config.ts).
+// - In builds without a dev proxy, set VITE_API_BASE (e.g. http://localhost:8000)
+//   so requests still work.
+const baseURL = (import.meta as any)?.env?.VITE_API_BASE || "";
+export const apiUrl = (baseURL || "").replace(/\/$/, "");
 
 export const api = axios.create({
-  baseURL: BASE || undefined,
-  timeout: 120000,
+  baseURL,
+  timeout: 30000,
 });
 
-/**
- * Request interceptor:
- * - attach Authorization Bearer token
- * - rewrite /api prefix if BASE already ends with /api
- */
-api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  const token = getToken();
+// Keep a single source of truth for auth tokens.
+// We store the token under `sms_token` (Sports Magazine SaaS token).
+// Some older builds used `token`; we keep backward compatibility.
+export function setToken(token: string | null) {
+  if (typeof window === "undefined") return;
   if (token) {
-    if (!config.headers) config.headers = new AxiosHeaders();
-    (config.headers as AxiosHeaders).set("Authorization", `Bearer ${token}`);
+    localStorage.setItem("sms_token", token);
+    // Back-compat: keep the legacy key in sync
+    localStorage.setItem("token", token);
+  } else {
+    localStorage.removeItem("sms_token");
+    localStorage.removeItem("token");
   }
+}
 
-  // If baseURL already ends with /api, avoid calling /api/api/...
-  const b = (config.baseURL ?? api.defaults.baseURL ?? "").toString().replace(/\/+$/, "");
-  const baseHasApi = /\/api$/i.test(b);
-  if (baseHasApi && typeof config.url === "string") {
-    if (config.url.startsWith("/api/")) config.url = config.url.slice(4); // remove "/api"
-    else if (config.url === "/api") config.url = ""; // edge case
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem("sms_token") || localStorage.getItem("token");
+  if (token) {
+    config.headers = config.headers || {};
+    (config.headers as any).Authorization = `Bearer ${token}`;
   }
-
   return config;
 });
+
+api.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    const status = err?.response?.status;
+    if (status === 401) {
+      localStorage.removeItem("sms_token");
+      localStorage.removeItem("token");
+      localStorage.removeItem("sms_user");
+      if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+        window.location.href = "/login";
+      }
+    }
+    return Promise.reject(err);
+  }
+);
+
+// Some pages import the API client as default; keep this for compatibility.
+export default api;
