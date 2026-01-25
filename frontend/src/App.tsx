@@ -1,10 +1,12 @@
 import { useEffect, useMemo } from "react";
 import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
+
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 import Editor from "./pages/Editor";
 import AdminDashboard from "./pages/AdminDashboard";
+
 import { useAuth } from "./store/auth";
 
 function getApiBase(): string {
@@ -17,10 +19,9 @@ function getApiBase(): string {
 export default function App() {
   const nav = useNavigate();
   const loc = useLocation();
-  const { token, logout, clubs, activeClubId, loadMe, loadClubs, me } = useAuth();
+  const { token, logout, clubs, activeClubId, loadMe, loadClubs, user } = useAuth();
 
   useEffect(() => {
-    // Cargar sesión y clubs
     if (token) {
       loadMe();
       loadClubs();
@@ -41,13 +42,18 @@ export default function App() {
     return `${apiBase}/api/assets/file/${id}`;
   }, [activeClub, apiBase]);
 
-  const showAdmin = !!token && (me?.role === "super_admin" || me?.role === "admin");
+  const showAdmin = !!token && user?.role === "super_admin";
 
   return (
     <div className="appRoot">
       <header className="topbar">
         <div className="topbarLeft">
-          <div className="topbarLogoWrap" onClick={() => nav(token ? "/dashboard" : "/")} style={{ cursor: "pointer" }}>
+          <div
+            className="topbarLogoWrap"
+            onClick={() => nav(token ? "/dashboard" : "/")}
+            style={{ cursor: "pointer" }}
+            title="Ir al dashboard"
+          >
             {clubLogoUrl ? (
               <img
                 src={clubLogoUrl}
