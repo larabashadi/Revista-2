@@ -8,39 +8,56 @@ export default function Register() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [err, setErr] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  const onSubmit = async () => {
-    setErr("");
+  async function submit() {
+    setErr(null);
+    setBusy(true);
     try {
-      await register(email, password);
+      await register(email.trim(), password);
       nav("/");
     } catch (e: any) {
-      setErr(e?.response?.data?.detail || e?.message || "Error registrando");
+      setErr(e?.response?.data?.detail || e?.message || "Error");
+    } finally {
+      setBusy(false);
     }
-  };
+  }
 
   return (
     <div className="layout" style={{ gridTemplateColumns: "1fr" }}>
-      <div className="main" style={{ maxWidth: 520, margin: "0 auto" }}>
+      <div className="main" style={{ maxWidth: 560, margin: "0 auto" }}>
         <div className="card">
           <h2 style={{ marginTop: 0 }}>Crear cuenta</h2>
 
           <div className="field">
             <label>Email</label>
-            <input value={email} onChange={(e) => setEmail(e.target.value)} />
+            <input
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="club@correo.com"
+            />
           </div>
 
           <div className="field">
             <label>Contraseña</label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="********"
+            />
           </div>
 
           {err && <div style={{ color: "#ff8aa0", marginBottom: 10 }}>{err}</div>}
 
           <div style={{ display: "flex", gap: 10 }}>
-            <button className="btn primary" onClick={onSubmit}>Crear</button>
-            <button className="btn" onClick={() => nav("/login")}>Ya tengo cuenta</button>
+            <button className="btn primary" onClick={submit} disabled={busy}>
+              {busy ? "Creando..." : "Crear"}
+            </button>
+            <button className="btn" onClick={() => nav("/login")} disabled={busy}>
+              Ya tengo cuenta
+            </button>
           </div>
         </div>
       </div>
