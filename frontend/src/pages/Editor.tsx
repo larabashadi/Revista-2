@@ -507,45 +507,74 @@ export default function Editor() {
   const ensureDetectedForPage = async (pageIndex: number) => {
     if (!projectId || !doc?.pages?.[pageIndex]) return;
     const p = doc.pages[pageIndex];
-    const hasDetectedLayer = (p.layers || []).some((l: any) => String(l.id || "").startsWith("detected_"));
-    if (hasDetectedLayer) return;
+
+    // Use the existing overlay layer if present; that's what the UI toggles expect.
+    const layers = Array.isArray(p.layers) ? p.layers : [];
+    const overlayIdx = layers.findIndex(
+      (l: any) =>
+        l?.id === "overlay" || String(l?.name || "").toLowerCase().includes("detectado")
+    );
+
+    const overlay = overlayIdx >= 0 ? layers[overlayIdx] : null;
+    const already =
+      overlay &&
+      Array.isArray(overlay.items) &&
+      overlay.items.some((it: any) => String(it?.id || "").startsWith("detected_"));
+    if (already) return;
 
     try {
-      const res = await api.post(`/api/projects/item/${projectId}/detect?page_index=${pageIndex}`);
-      const detected = res.data || {};
+      // ✅ Backend route is /api/projects/item/{project_id}/detect/{page_index}
+      const res = await api.post(`/api/projects/item/${projectId}/detect/${pageIndex}`);
+      const detected = (res.data && (res.data.detected || res.data)) || {};
+
+      const textItems = (detected.text || []).map((t: any, idx: number) => ({
+        id: `detected_text_${t.id ?? idx}`,
+        type: "TextFrame",
+        rect: { x: t.x, y: t.y, w: t.w, h: t.h },
+        text: t.text || "",
+        font: "Inter",
+        size: 14,
+        color: t.color_hex || "#111827",
+        bg: rgbaFromHex(t.bg_hex || "#ffffff", 0.92),
+        bg_hex: t.bg_hex || "#ffffff",
+      }));
+
+      const imgItems = (detected.images || []).map((im: any, idx: number) => ({
+        id: `detected_img_${im.id ?? idx}`,
+        type: "ImageFrame",
+        rect: { x: im.x, y: im.y, w: im.w, h: im.h },
+        assetRef: im.asset_id || null,
+      }));
+
       setDoc((prev: any) => {
         if (!prev) return prev;
         const next = JSON.parse(JSON.stringify(prev));
-        const page = next.pages[pageIndex];
-        page.layers = page.layers || [];
+        const page = next.pages?.[pageIndex];
+        if (!page) return prev;
+        page.layers = Array.isArray(page.layers) ? page.layers : [];
 
-        const textItems = (detected.text || []).map((t: any) => ({
-          id: `detected_text_${t.id}`,
-          type: "TextFrame",
-          rect: { x: t.x, y: t.y, w: t.w, h: t.h },
-          text: t.text || "",
-          font: "Inter",
-          size: 14,
-          color: t.color_hex || "#111827",
-          bg: rgbaFromHex(t.bg_hex || "#ffffff", 0.92),
-          bg_hex: t.bg_hex || "#ffffff",
-        }));
+        // Ensure overlay layer exists and contains detected items.
+        let idxOverlay = page.layers.findIndex(
+          (l: any) =>
+            l?.id === "overlay" || String(l?.name || "").toLowerCase().includes("detectado")
+        );
 
-        const imgItems = (detected.images || []).map((im: any) => ({
-          id: `detected_img_${im.id}`,
-          type: "ImageFrame",
-          rect: { x: im.x, y: im.y, w: im.w, h: im.h },
-          // placeholder until user replaces
-          assetId: im.asset_id || null,
-        }));
+        const base = idxOverlay >= 0 ? page.layers[idxOverlay] : { id: "overlay", name: "Detectado", visible: true, locked: false, items: [] };
+        base.items = Array.isArray(base.items) ? base.items : [];
 
-        page.layers = page.layers.filter((l: any) => !String(l.id || "").startsWith("detected_"));
-        if (textItems.length) page.layers.push({ id: "detected_text", role: "overlay", items: textItems });
-        if (imgItems.length) page.layers.push({ id: "detected_images", role: "overlay", items: imgItems });
+        // Remove previous detected_* items then append fresh ones
+        base.items = base.items.filter((it: any) => !String(it?.id || "").startsWith("detected_"));
+        base.items.push(...textItems, ...imgItems);
+        base.visible = true;
+
+        if (idxOverlay >= 0) page.layers[idxOverlay] = base;
+        else page.layers.push(base);
+
         return next;
       });
     } catch (e) {
       console.error(e);
+      showToast("No se pudo detectar texto/imágenes (API). Revisa backend/proxy.");
     }
   };
 
@@ -1184,7 +1213,8 @@ export default function Editor() {
               </button>
               <button
                 className="btn"
-                onClick={() => {
+                onClick={async () => {
+                  await ensureDetectedForPage(pageIndex);
                   setDetectTextByPage((m) => ({ ...m, [pageIndex]: true }));
                   setDetectImagesByPage((m) => ({ ...m, [pageIndex]: true }));
                 }}
