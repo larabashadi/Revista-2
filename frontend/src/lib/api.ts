@@ -1,47 +1,80 @@
-import axios, { InternalAxiosRequestConfig } from "axios";
+import axios, { type AxiosInstance, type InternalAxiosRequestConfig } from "axios";
 
 /**
- * IMPORTANT:
- * - En Render debes definir VITE_API_BASE como la URL del BACKEND (sin /api)
- *   Ej: https://revista-2-1.onrender.com
- * - Este archivo añade /api automáticamente.
+ * VITE_API_BASE debe ser la URL del BACKEND SIN /api
+ * Ej: https://revista-2-1.onrender.com
+ *
+ * Este módulo:
+ * - crea axios con baseURL = <origin>/api
+ * - exporta apiUrl(path) como FUNCIÓN (para thumbs/assets/etc)
+ * - evita el error TS2322 de headers en Axios v1
  */
-const RAW_BASE =
-  (import.meta as any).env?.VITE_API_BASE?.toString?.().trim?.() || "";
 
-export const apiBase = (() => {
-  const base = RAW_BASE.replace(/\/+$/, "");
-  if (!base) return "/api"; // fallback (útil si sirves front+back en el mismo dominio)
-  return `${base}/api`;
-})();
+function normalizeOrigin(raw: string): string {
+  let b = String(raw || "").trim();
+  if (!b) return "";
+  b = b.replace(/\/+$/, "");      // quita slash final
+  if (b.endsWith("/api")) b = b.slice(0, -4); // si te lo pasan con /api, lo quitamos
+  return b;
+}
 
-export const apiUrl = apiBase; // alias por compatibilidad con imports antiguos
+export const API_ORIGIN: string =
+  normalizeOrigin((import.meta as any)?.env?.VITE_API_BASE) || "";
 
-export const api = axios.create({
-  baseURL: apiBase,
-  timeout: 120000,
+// Base real para requests API (axios)
+export const API_HTTP_BASE: string = API_ORIGIN ? `${API_ORIGIN}/api` : "/api";
+
+// Si algún archivo necesita el string del base (compat)
+export const apiBase = API_HTTP_BASE;
+
+export function apiUrl(path: string = ""): string {
+  // Si ya es URL absoluta, la devolvemos
+  if (/^https?:\/\//i.test(path)) return path;
+
+  const p = path.startsWith("/") ? path : `/${path}`;
+
+  // Si viene como /api/..., no lo duplicamos
+  if (p.startsWith("/api/")) {
+    return API_ORIGIN ? `${API_ORIGIN}${p}` : p;
+  }
+
+  // Si viene como /assets/... o /templates/... lo asumimos bajo /api
+  const full = `/api${p}`;
+  return API_ORIGIN ? `${API_ORIGIN}${full}` : full;
+}
+
+const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
+
+export const api: AxiosInstance = axios.create({
+  baseURL: API_HTTP_BASE,
+  timeout: DEFAULT_TIMEOUT_MS,
 });
 
-let _token: string | null = localStorage.getItem("token");
+const TOKEN_KEY = "token";
 
-export function setToken(t: string | null) {
-  _token = t;
-  if (t) localStorage.setItem("token", t);
-  else localStorage.removeItem("token");
+export function getToken(): string {
+  return localStorage.getItem(TOKEN_KEY) || "";
 }
 
-export function getToken() {
-  return _token ?? localStorage.getItem("token");
+export function setToken(token: string) {
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
 }
 
-// Request interceptor: añade Authorization sin romper typings de Axios 1.x
+export function clearToken() {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+// Interceptor: añade Authorization sin romper TS de Axios v1
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const t = getToken();
   if (t) {
-    config.headers = config.headers ?? ({} as any);
-    (config.headers as any).Authorization = `Bearer ${t}`;
+    const headers: any = (config.headers ?? {}) as any;
+    headers["Authorization"] = `Bearer ${t}`;
+    config.headers = headers;
   }
   return config;
 });
 
+// compat: por si hay imports default
 export default api;
