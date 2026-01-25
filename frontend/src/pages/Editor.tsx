@@ -684,25 +684,28 @@ export default function Editor() {
     setSelectedId(id);
   };
 
-  const uploadAsset = async (file: File) => {
-    if (!club) throw new Error("No hay club activo");
+ 
+    const uploadAsset = async (file: File) => {
+  if (!club) throw new Error("No hay club activo");
 
-    const ok =
-      (file.type || "").startsWith("image/") ||
-      /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name || "");
-    if (!ok) throw new Error("Formato no soportado. Usa PNG/JPG/WEBP/GIF/BMP.");
+  const ok =
+    file.type.startsWith("image/") ||
+    /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name || "");
+  if (!ok) throw new Error("Formato no soportado. Usa PNG/JPG/WEBP/GIF/BMP.");
 
-    const fd = new FormData();
-    fd.append("file", file);
+  const fd = new FormData();
+  fd.append("file", file);
 
-    // IMPORTANT: do NOT force Content-Type here; axios will set the correct boundary.
-    const { data } = await api.post(`/api/assets/${club.id}`, fd, {
-      timeout: 0,
-      maxBodyLength: Infinity as any,
-      maxContentLength: Infinity as any,
-    });
-    return data.id as string;
-  };
+  // ✅ NO poner headers Content-Type (axios pone boundary)
+  const { data } = await api.post(`/api/assets/${club.id}`, fd, {
+    timeout: 0,
+    maxBodyLength: Infinity as any,
+    maxContentLength: Infinity as any,
+  });
+
+  return data.id as string;
+};
+
 
   const onPickImage = async (file: File) => {
     try {
