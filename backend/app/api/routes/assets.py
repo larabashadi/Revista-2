@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import mimetypes
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -28,37 +26,62 @@ async def upload_asset(
     if not content:
         raise HTTPException(status_code=400, detail="Empty upload")
 
-    filename = file.filename or "asset.bin"
-    mime = file.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
-
-    asset_id, _path = save_local_file(content, filename)
+    asset_id, _path = save_local_file(content, file.filename or "asset.bin")
 
     asset = Asset(
         id=asset_id,
         club_id=club.id,
-        filename=filename,
-        mime=mime,
+        filename=file.filename or "asset.bin",
+        mime=file.content_type or "application/octet-stream",
         storage_path=asset_id,
     )
     db.add(asset)
     db.commit()
 
-    return {"id": asset_id, "url": f"/api/assets/file/{asset_id}", "filename": filename, "mime": mime}
+    return {"id": asset_id, "url": f"/api/assets/file/{asset_id}", "filename": asset.filename, "mime": asset.mime}
+
+
+@router.put("/{asset_id}")
+async def replace_asset(
+    asset_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    asset = db.get(Asset, asset_id)
+    if not asset or not asset.club_id:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    club = db.get(Club, asset.club_id)
+    if not club or club.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty upload")
+
+    # Guardamos como nuevo fichero, pero mantenemos el mismo asset_id (para "reemplazar")
+    new_id, _path = save_local_file(content, file.filename or asset.filename)
+
+    asset.filename = file.filename or asset.filename
+    asset.mime = file.content_type or asset.mime
+    asset.storage_path = new_id
+    db.add(asset)
+    db.commit()
+
+    return {"id": asset.id, "url": f"/api/assets/file/{asset.id}", "filename": asset.filename, "mime": asset.mime}
 
 
 @router.get("/file/{asset_id}")
 def get_asset_file(asset_id: str, db: Session = Depends(get_db)):
     asset = db.get(Asset, asset_id)
+    # Si no está en DB, igualmente intentamos resolverlo por storage (compat)
     try:
-        path = get_local_path(asset_id)
+        storage_key = asset.storage_path if asset else asset_id
+        path = get_local_path(storage_key)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Asset not found")
 
-    media_type = (asset.mime if asset else None) or mimetypes.guess_type(path)[0] or "application/octet-stream"
-
-    # Cache assets aggressively (they are content-addressed by id)
-    return FileResponse(
-        path,
-        media_type=media_type,
-        headers={"Cache-Control": "public, max-age=31536000, immutable"},
-    )
+    media = asset.mime if asset else None
+    headers = {"Cache-Control": "public, max-age=31536000, immutable"}
+    return FileResponse(path, media_type=media, headers=headers)
