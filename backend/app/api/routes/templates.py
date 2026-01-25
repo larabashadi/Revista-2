@@ -1,8 +1,9 @@
 from __future__ import annotations
-import json, time, uuid
+import json, time, uuid, os
 from fastapi import APIRouter, Body, Depends, HTTPException
 from importlib import import_module
 from fastapi.responses import Response
+from collections import OrderedDict
 from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy.orm import Session
 from app.core.db import get_db
@@ -28,6 +29,34 @@ def _get_generate_fn():
     return fn
 
 router = APIRouter(prefix="/api/templates", tags=["templates"])
+
+# Simple in-memory LRU cache for template thumbnails (speeds up dashboard a lot on small servers).
+_THUMB_CACHE: OrderedDict[tuple, tuple[float, bytes]] = OrderedDict()
+_THUMB_CACHE_MAX = int(os.getenv("THUMB_CACHE_MAX", "128"))
+_THUMB_CACHE_TTL = int(os.getenv("THUMB_CACHE_TTL", "3600"))  # seconds
+
+def _thumb_cache_get(key: tuple) -> bytes | None:
+    now = time.time()
+    v = _THUMB_CACHE.get(key)
+    if not v:
+        return None
+    ts, data = v
+    if now - ts > _THUMB_CACHE_TTL:
+        try:
+            del _THUMB_CACHE[key]
+        except KeyError:
+            pass
+        return None
+    # refresh LRU position
+    _THUMB_CACHE.move_to_end(key)
+    return data
+
+def _thumb_cache_set(key: tuple, data: bytes) -> None:
+    _THUMB_CACHE[key] = (time.time(), data)
+    _THUMB_CACHE.move_to_end(key)
+    while len(_THUMB_CACHE) > _THUMB_CACHE_MAX:
+        _THUMB_CACHE.popitem(last=False)
+
 
 
 def _render_template_thumbnail(document: dict, db: Session, size: int = 320, page_index: int = 0) -> bytes:
@@ -162,12 +191,32 @@ def get_template_thumbnail(template_id: str, size: int = 320, page: int = 0, db:
     t = db.get(Template, template_id)
     if not t:
         raise HTTPException(status_code=404, detail="Template not found")
+    cache_key = (
+        template_id,
+        int(size),
+        int(page),
+        t.layout_signature or "",
+        t.catalog_version or "",
+    )
+    cached = _thumb_cache_get(cache_key)
+    if cached is not None:
+        return Response(
+            content=cached,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400, stale-while-revalidate=3600"},
+        )
+
     try:
         doc = json.loads(t.document_json)
     except Exception:
         doc = {}
     png = _render_template_thumbnail(doc, db, size=max(200, min(int(size), 720)), page_index=page)
-    return Response(content=png, media_type="image/png")
+    _thumb_cache_set(cache_key, png)
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400, stale-while-revalidate=3600"},
+    )
 
 @router.get("", response_model=list[TemplateOut])
 def list_templates(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
