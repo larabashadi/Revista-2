@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Dict, Any, List, Tuple
 import uuid
+import os
 import fitz
 from sqlalchemy.orm import Session
 
@@ -65,7 +66,10 @@ def _sample_solid_bg_hex(pix: fitz.Pixmap, bbox: fitz.Rect, page_w: float, page_
     except Exception:
         return None
 
-def _render_page_image(doc: fitz.Document, page_index: int, scale: float=2.0) -> bytes:
+def _render_page_image(doc: fitz.Document, page_index: int, scale: float | None = None) -> bytes:
+    if scale is None:
+        # Lower scale makes imports MUCH faster on small servers (Render free tiers).
+        scale = float(os.getenv("PDF_IMPORT_SCALE", "1.25"))
     page = doc.load_page(page_index)
     mat = fitz.Matrix(scale, scale)
     pix = page.get_pixmap(matrix=mat, alpha=False)
@@ -106,7 +110,7 @@ def import_pdf_to_document(db: Session, club_id: str, pdf_bytes: bytes, mode: st
                 pix_low = None
 
         # Background raster
-        bg_png = _render_page_image(doc, i, scale=2.0)
+        bg_png = _render_page_image(doc, i)
         bg_asset_id = _mk_asset(db, club_id, bg_png, f"import_bg_p{i+1}")
         created_asset_ids.append(bg_asset_id)
 
@@ -268,173 +272,93 @@ def import_pdf_to_document(db: Session, club_id: str, pdf_bytes: bytes, mode: st
     return out_doc, created_asset_ids
 
 
-
-def detect_pdf_page_overlays(db: Session, club_id: str, pdf_bytes: bytes, page_index: int) -> Dict[str, Any]:
-    """
-    Detect editable overlays for a single page of a source PDF:
-
-    - Text: extracted from the PDF text layer (NOT OCR). Preserves line breaks and basic span styling.
-    - Images: extracted from embedded images and saved as Assets so they can be replaced/moved in the editor.
-
-    If the PDF is scanned (no real text layer), returns meta.ocr_needed=True and no text items.
-    """
+def detect_pdf_page_overlays(pdf_bytes: bytes, page_index: int) -> Dict[str, List[Dict[str, Any]]]:
+    """Detect text blocks and image placeholders for a single page (0-based)."""
     d = fitz.open(stream=pdf_bytes, filetype="pdf")
     if page_index < 0 or page_index >= d.page_count:
-        d.close()
         raise ValueError("page_index out of range")
 
     page = d.load_page(page_index)
-    page_w, page_h = float(page.rect.width), float(page.rect.height)
 
-    def map_rect(rr: fitz.Rect) -> Dict[str, float]:
-        return _map_rect(rr, page_w, page_h)
+    # Render page once for simple background sampling
+    zoom = 2.0
+    pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+    img_bytes = pix.samples
+    width, height = pix.width, pix.height
 
-    # --- TEXT ---
+    def _avg_rgb(rect: fitz.Rect) -> Tuple[float, float, float]:
+        # rect is in page points; convert to rendered pixels
+        x0 = max(0, int(rect.x0 * zoom))
+        y0 = max(0, int(rect.y0 * zoom))
+        x1 = min(width, int(rect.x1 * zoom))
+        y1 = min(height, int(rect.y1 * zoom))
+        if x1 <= x0 or y1 <= y0:
+            return (1.0, 1.0, 1.0)
+        # sample a sparse grid for speed
+        step_x = max(1, (x1 - x0) // 20)
+        step_y = max(1, (y1 - y0) // 20)
+        r = g = b = n = 0
+        for yy in range(y0, y1, step_y):
+            row_off = yy * width * 3
+            for xx in range(x0, x1, step_x):
+                off = row_off + xx * 3
+                r += img_bytes[off]
+                g += img_bytes[off + 1]
+                b += img_bytes[off + 2]
+                n += 1
+        if n == 0:
+            return (1.0, 1.0, 1.0)
+        return (r / (255.0 * n), g / (255.0 * n), b / (255.0 * n))
+
     out_text: List[Dict[str, Any]] = []
+    out_images: List[Dict[str, Any]] = []
 
-    # rawdict keeps text more faithfully than dict for many PDFs
-    try:
-        td = page.get_text("rawdict")
-    except Exception:
-        td = page.get_text("dict")
-
-    blocks = td.get("blocks", []) if isinstance(td, dict) else []
-    total_chars = 0
-    total_printable = 0
-
+    # Text blocks
+    blocks = page.get_text("dict").get("blocks", [])
     for b in blocks:
         if b.get("type") != 0:
             continue
-
-        bbox = b.get("bbox", None)
-        if not bbox or len(bbox) != 4:
+        lines = b.get("lines", [])
+        text_parts: List[str] = []
+        color_rgb = (0.07, 0.09, 0.14)  # fallback
+        for ln in lines:
+            for sp in ln.get("spans", []):
+                t = (sp.get("text") or "").strip("\n")
+                if t:
+                    text_parts.append(t)
+                # derive text color from first span
+                if sp.get("color") is not None:
+                    c = int(sp.get("color"))
+                    color_rgb = ((c >> 16 & 255) / 255.0, (c >> 8 & 255) / 255.0, (c & 255) / 255.0)
+        text = " ".join(text_parts).strip()
+        if not text:
             continue
-        rect = fitz.Rect(bbox[0], bbox[1], bbox[2], bbox[3])
-
-        runs: List[Dict[str, Any]] = []
-        # Preserve line breaks: add "\n" between lines
-        lines = b.get("lines", []) or []
-        for li, ln in enumerate(lines):
-            spans = ln.get("spans", []) or []
-            for sp in spans:
-                t = sp.get("text", "")
-                if t is None:
-                    continue
-                # Keep as-is, do not .strip() to avoid "inventing" spacing
-                if t == "":
-                    continue
-
-                # Stats for "scanned / garbage" detection
-                total_chars += len(t)
-                total_printable += sum(1 for ch in t if 32 <= ord(ch) <= 126 or ch in "\n\t" or ch.isalpha())
-
-                marks: Dict[str, Any] = {}
-                try:
-                    marks["size"] = float(sp.get("size", 13))
-                except Exception:
-                    pass
-
-                col = sp.get("color")
-                if isinstance(col, int):
-                    marks["color"] = _int_to_hex_rgb(col)
-                fn = (sp.get("font") or "").strip()
-                if fn:
-                    marks["font"] = fn
-
-                flags = sp.get("flags")
-                if isinstance(flags, int):
-                    # These are best-effort; PyMuPDF flags vary by producer
-                    if flags & 16:
-                        marks["bold"] = True
-                    if flags & 2:
-                        marks["italic"] = True
-
-                runs.append({"text": t, "marks": marks})
-
-            if li < len(lines) - 1:
-                runs.append({"text": "\n", "marks": {}})
-
-        plain = "".join([r.get("text", "") for r in runs]).strip()
-        if not plain:
-            continue
-
+        rect = fitz.Rect(b.get("bbox"))
+        bg = _avg_rgb(rect)
         out_text.append(
             {
                 "id": str(uuid.uuid4()),
-                "rect": map_rect(rect),
-                "text": plain,
-                "runs": runs,
-                "color_hex": "#111827",
+                "text": text,
+                "rect": [float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1)],
+                "color": list(color_rgb),
+                "bgColor": list(bg),
             }
         )
 
-    # Heuristic: if extracted text looks like garbage / almost none, mark as OCR needed.
-    ocr_needed = False
-    if total_chars == 0:
-        ocr_needed = True
-        out_text = []
-    else:
-        ratio = (total_printable / max(1, total_chars))
-        if ratio < 0.55 and total_chars > 50:
-            # Many scanned PDFs produce weird non-printable output
-            ocr_needed = True
-            out_text = []
-
-    # --- IMAGES ---
-    out_images: List[Dict[str, Any]] = []
-    seen_xref: set[int] = set()
-
-    try:
-        imgs = page.get_images(full=True)
-    except Exception:
-        imgs = []
-
-    for img in imgs:
-        xref = int(img[0])
-        if xref in seen_xref:
-            continue
-        seen_xref.add(xref)
-
+    # Image placeholders
+    for img in page.get_images(full=True):
+        xref = img[0]
         try:
             rects = page.get_image_rects(xref)
         except Exception:
             rects = []
-
-        if not rects:
-            continue
-
-        # Extract the actual image bytes and save as an Asset
-        im_bytes = None
-        try:
-            pix = fitz.Pixmap(d, xref)
-            if pix.n >= 5:
-                pix = fitz.Pixmap(fitz.csRGB, pix)
-            im_bytes = pix.tobytes("png")
-        except Exception:
-            try:
-                raw = d.extract_image(xref)
-                im_bytes = raw.get("image")
-            except Exception:
-                im_bytes = None
-
-        asset_id = None
-        if im_bytes:
-            asset_id = _mk_asset(db, club_id, im_bytes, f"detect_img_p{page_index+1}_{xref}")
-
-        for rr in rects[:8]:
-            mapped = map_rect(rr)
-            if mapped["w"] < 8 or mapped["h"] < 8:
-                continue
+        for rr in rects:
             out_images.append(
                 {
                     "id": str(uuid.uuid4()),
-                    "rect": mapped,
-                    "asset_id": asset_id,
-                    "xref": xref,
+                    "rect": [float(rr.x0), float(rr.y0), float(rr.x1), float(rr.y1)],
                 }
             )
 
     d.close()
-    db.commit()
-    return {"text": out_text, "images": out_images, "meta": {"ocr_needed": ocr_needed}}
-
+    return {"text": out_text, "images": out_images}
