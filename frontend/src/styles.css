@@ -1,68 +1,140 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=Roboto:wght@400;700&family=Montserrat:wght@400;700&family=Poppins:wght@400;700&family=Oswald:wght@400;700&family=Bebas+Neue&family=Playfair+Display:wght@400;700&display=swap');
+import React, { useEffect } from "react";
+import { Routes, Route, useNavigate, Navigate } from "react-router-dom";
 
-:root{
-  --bg0:#f3f4f6;
-  --bg1:#ffffff;
-  --bg2:#e5e7eb;
-  --text:#111827;
-  --muted:#6b7280;
-  --accent:#2563eb;
-  --danger:#dc2626;
-  --shadow:0 12px 30px rgba(0,0,0,.10);
-    --panel: rgba(255,255,255,.75);
-  --border: rgba(17,24,39,.12);
+import Login from "./pages/Login";
+import Register from "./pages/Register";
+import Dashboard from "./pages/Dashboard";
+import Editor from "./pages/Editor";
+import AdminDashboard from "./pages/AdminDashboard";
+
+import { useAuth } from "./store/auth";
+import { apiUrl } from "./config";
+
+function Topbar() {
+  const nav = useNavigate();
+  const { token, user, logout } = useAuth();
+
+  // Intentamos sacar el logo “seleccionado” desde donde suele venir en proyectos así:
+  // - user.club.logo_asset_id
+  // - user.club_logo_asset_id / logo_asset_id
+  // - club.locked_logo_asset_id (fallback)
+  const logoAssetId =
+    (user as any)?.club?.logo_asset_id ||
+    (user as any)?.club?.locked_logo_asset_id ||
+    (user as any)?.club_logo_asset_id ||
+    (user as any)?.logo_asset_id ||
+    (user as any)?.locked_logo_asset_id;
+
+  const logoSrc = logoAssetId ? apiUrl(`/api/assets/file/${logoAssetId}`) : null;
+
+  return (
+    <header className="topbar">
+      <div className="topbarLeft" onClick={() => nav("/")}>
+        {logoSrc ? (
+          <div className="topbarLogoWrap" title="Logo del club">
+            <img className="topbarLogo" src={logoSrc} alt="Club logo" />
+          </div>
+        ) : (
+          <div className="topbarLogoFallback" aria-hidden="true">
+            S
+          </div>
+        )}
+
+        <div className="brandText">
+          <div className="brandTitle">Sports Magazine SaaS</div>
+          <div className="brandSub">Editor de revistas</div>
+        </div>
+      </div>
+
+      <div className="topActions">
+        {token ? (
+          <>
+            <button className="btn btnTop" onClick={() => nav("/")}>
+              Dashboard
+            </button>
+
+            {user?.role === "super_admin" && (
+              <button className="btn btnTop btnTopAdmin" onClick={() => nav("/admin")}>
+                Admin
+              </button>
+            )}
+
+            <button
+              className="btn btnTop btnTopDanger"
+              onClick={() => {
+                logout();
+                nav("/login");
+              }}
+            >
+              Salir
+            </button>
+          </>
+        ) : (
+          <>
+            <button className="btn btnTop btnTopPrimary" onClick={() => nav("/login")}>
+              Entrar
+            </button>
+            <button className="btn btnTop" onClick={() => nav("/register")}>
+              Crear cuenta
+            </button>
+          </>
+        )}
+      </div>
+    </header>
+  );
 }
-*{box-sizing:border-box}
-html,body{height:100%}
-body{
-  margin:0;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-  background:
-    radial-gradient(1200px 600px at 50% 15%, rgba(91,140,255,.18), transparent 60%),
-    radial-gradient(900px 500px at 20% 10%, rgba(45,212,191,.10), transparent 55%),
-    linear-gradient(180deg,var(--bg1),var(--bg2));
-  color:var(--text);
+
+function PrivateRoute({ children }: { children: React.ReactNode }) {
+  const { token } = useAuth();
+  if (!token) return <Navigate to="/login" replace />;
+  return <>{children}</>;
 }
-.btn{border:1px solid var(--border);background:rgba(255,255,255,.04);color:var(--text);padding:10px 12px;border-radius:12px;cursor:pointer}
-.btn:hover{background:rgba(255,255,255,.08)}
-.btn.primary{background:rgba(91,140,255,.18); border-color:rgba(91,140,255,.45)}
-.btn.danger{background:rgba(255,77,109,.12); border-color:rgba(255,77,109,.35)}
-.card{border:1px solid var(--border);background:rgba(255,255,255,.03);border-radius:18px;padding:14px}
-.topbar{height:64px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1px solid var(--border);background:rgba(10,12,18,.92);position:sticky;top:0;z-index:10;backdrop-filter: blur(10px)}
-.brand{display:flex;align-items:center;gap:12px;font-weight:950}
-.pill{font-size:12px;padding:4px 10px;border:1px solid var(--border);border-radius:999px;color:var(--muted)}
-.layout{display:grid;grid-template-columns: 340px 1fr 360px;height:calc(100vh - 64px)}
-.sidebar{background:var(--panel);padding:14px;overflow:auto}
-.sidebar.left{border-right:1px solid var(--border)}
-.sidebar.right{border-left:1px solid var(--border)}
-.main{padding:18px;overflow:auto}
-.field{display:flex;flex-direction:column;gap:6px;margin-bottom:12px}
-.field label{font-size:12px;color:var(--muted)}
-.field input,.field select{height:40px;border-radius:14px;border:1px solid var(--border);background:rgba(255,255,255,.04);color:var(--text);padding:0 12px;outline:none}
-.grid{display:grid;grid-template-columns: repeat(2, 1fr);gap:10px}
-.templates{display:grid;grid-template-columns: repeat(3, minmax(0,1fr));gap:12px}
-.templatePreview{height:170px;border-radius:14px;overflow:hidden;border:1px solid var(--border);background:rgba(255,255,255,.02);margin-bottom:12px}
-.templatePreview img{width:100%;height:100%;object-fit:cover;display:block;filter:saturate(1.05) contrast(1.03)}
-/*
-  IMPORTANT UX:
-  Previous builds hid the right inspector under 1100px, which made it look like
-  the inspector "floats" over the canvas (or the user loses editing controls).
-  Keep the 3-column layout and allow scrolling instead. If the screen is small,
-  users can still work by scrolling sidebars.
-*/
-@media(max-width:1100px){
-  .layout{grid-template-columns: 280px 1fr 320px}
-  .templates{grid-template-columns: 1fr}
-}
-.toast{
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
-  left: auto;
-  transform: none;
-  background: rgba(12,14,20,.92);
-  border: 1px solid var(--border);
-  padding: 10px 14px;
-  border-radius: 999px;
-  box-shadow: 0 20px 50px rgba(0,0,0,.5);
+
+export default function App() {
+  const { token, loadMe } = useAuth();
+
+  useEffect(() => {
+    if (!token) return;
+    loadMe().catch(() => void 0);
+  }, [token, loadMe]);
+
+  return (
+    <>
+      <Topbar />
+
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
+
+        <Route
+          path="/"
+          element={
+            <PrivateRoute>
+              <Dashboard />
+            </PrivateRoute>
+          }
+        />
+
+        <Route
+          path="/editor/:projectId"
+          element={
+            <PrivateRoute>
+              <Editor />
+            </PrivateRoute>
+          }
+        />
+
+        <Route
+          path="/admin"
+          element={
+            <PrivateRoute>
+              <AdminDashboard />
+            </PrivateRoute>
+          }
+        />
+
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </>
+  );
 }
