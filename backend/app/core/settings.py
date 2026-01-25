@@ -1,18 +1,16 @@
-from __future__ import annotations
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import os
+import tempfile
+from pydantic import BaseSettings
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
-    APP_ENV: str = "dev"
-    APP_SECRET_KEY: str = "change_me"
-    APP_JWT_EXPIRE_MIN: int = 60 * 24 * 7
-    DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@db:5432/magazine"
-    REDIS_URL: str = "redis://redis:6379/0"
-    STORAGE_MODE: str = "local"
-    STORAGE_LOCAL_DIR: str = "./data/storage"
-
-    SUPERADMIN_EMAIL: str = ""
-    SUPERADMIN_PASSWORD: str = ""
-    ADMIN_ALLOWED_IPS: str = ""  # comma-separated, optional
+    # IMPORTANT:
+    # Render (y algunos hosts) pueden tener el directorio del proyecto como solo-lectura.
+    # Guardamos assets/PDFs en /tmp por defecto (escribible).
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./data/app.db")
+    JWT_SECRET: str = os.getenv("JWT_SECRET", "dev_secret_change_me")
+    STORAGE_LOCAL_DIR: str = os.getenv("STORAGE_LOCAL_DIR", os.path.join(tempfile.gettempdir(), "revista_storage"))
+    CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "*")
+    ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "admin@example.com")
+    ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "admin123")
 
 settings = Settings()
