@@ -1,34 +1,47 @@
 import { create } from "zustand";
 
-type ToastType = "success" | "error" | "info";
-
-export type Toast = {
+export type ToastType = "info" | "success" | "error" | "warning";
+export type ToastItem = {
   id: string;
   type: ToastType;
   message: string;
+  createdAt: number;
 };
 
 type ToastState = {
-  toasts: Toast[];
-  showToast: (message: string, type?: ToastType, ms?: number) => void;
-  removeToast: (id: string) => void;
+  items: ToastItem[];
+  push: (message: string, type?: ToastType) => void;
+  remove: (id: string) => void;
   clear: () => void;
 };
 
-export const useToast = create<ToastState>((set, get) => ({
-  toasts: [],
-  showToast: (message, type = "info", ms = 3500) => {
-    const id = Math.random().toString(36).slice(2);
-    const toast: Toast = { id, type, message };
-
-    set({ toasts: [...get().toasts, toast] });
-
-    // fallback: al menos lo verás en consola si no hay componente visual de toasts
-    if (type === "error") console.error(message);
-    else console.log(message);
-
-    window.setTimeout(() => get().removeToast(id), ms);
-  },
-  removeToast: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),
-  clear: () => set({ toasts: [] }),
+export const useToast = create<ToastState>((set) => ({
+  items: [],
+  push: (message, type = "info") =>
+    set((s) => ({
+      items: [
+        ...s.items,
+        {
+          id: (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`) as string,
+          type,
+          message,
+          createdAt: Date.now(),
+        },
+      ],
+    })),
+  remove: (id) => set((s) => ({ items: s.items.filter((t) => t.id !== id) })),
+  clear: () => set({ items: [] }),
 }));
+
+const toastFn = (message: string, type: ToastType = "info") => {
+  useToast.getState().push(message, type);
+};
+
+export const toast = Object.assign(toastFn, {
+  info: (m: string) => toastFn(m, "info"),
+  success: (m: string) => toastFn(m, "success"),
+  error: (m: string) => toastFn(m, "error"),
+  warning: (m: string) => toastFn(m, "warning"),
+});
+
+export default toast;
