@@ -23,7 +23,8 @@ const safeClone = <T,>(obj: T): T => {
 };
 
 function loadImg(url: string, onError?: () => void): HTMLImageElement {
- const imageEl = new window.Image();
+ const imageEl = await loadAssetImage(assetRef);
+
 imageEl.crossOrigin = "anonymous";
 imageEl.src = apiUrl(`/api/assets/file/${id}`);
 
@@ -35,6 +36,14 @@ imageEl.src = apiUrl(`/api/assets/file/${id}`);
 
   return img;
 }
+const loadAssetImage = (assetId: string) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const imageEl = new window.Image();
+    imageEl.crossOrigin = "anonymous";
+    imageEl.onload = () => resolve(imageEl);
+    imageEl.onerror = () => reject(new Error("No se pudo cargar imagen"));
+    imageEl.src = apiUrl(`/api/assets/file/${assetId}`);
+  });
 
 function stripHtml(s: string) {
   return s.replace(/<[^>]*>/g, "");
