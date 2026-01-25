@@ -18,29 +18,30 @@ from app.api.routes.admin import router as admin_router
 from app.core.migrations import ensure_schema
 from app.services.superadmin import ensure_super_admin
 from app.services.catalog_seed import ensure_catalog_seeded
-# IMPORTANT:
-# We deliberately do NOT seed templates from bundled "sample PDFs".
-# That approach made the catalog look like it was reusing PDFs and didn't provide
-# editable, reusable layouts. The catalog must be generated from our own JSON
-# templates (with placeholders) so users can customize everything.
 
 logger = logging.getLogger("magazine")
 
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Sports Magazine SaaS", version="10.4.12")
-        app.add_middleware(
+
+    # ✅ CORS CORRECTO para Render (Bearer token, SIN cookies)
+    app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=[
+            "https://revista-2-2.onrender.com",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ],
+        allow_origin_regex=r"https://.*\.onrender\.com",
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
         expose_headers=["Content-Disposition"],
     )
 
-
     @app.on_event("startup")
     def _startup() -> None:
-        # Wait for DB (docker-compose depends_on doesn't guarantee readiness)
         last_err: Exception | None = None
         for _ in range(30):
             try:
@@ -53,10 +54,8 @@ def create_app() -> FastAPI:
                 time.sleep(1)
 
         if last_err is not None:
-            # If DB never became ready, crash clearly.
             raise last_err
 
-        # Best-effort seed (never crash the API if seeding fails)
         db = SessionLocal()
         try:
             ensure_catalog_seeded(db)
@@ -81,9 +80,9 @@ def create_app() -> FastAPI:
 
     @app.get("/api/version")
     def version():
-        # Small endpoint used by the frontend to verify API reachability.
         return {"ok": True, "version": app.version, "ts": int(time.time())}
 
     return app
+
 
 app = create_app()
