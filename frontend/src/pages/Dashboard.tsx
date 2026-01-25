@@ -146,9 +146,7 @@ export default function Dashboard() {
     }
   }
 
-  const shown = templates.filter((t) =>
-    (t.name + " " + t.origin + " " + t.sport).toLowerCase().includes(filter.toLowerCase())
-  );
+  const shown = templates.filter(t => (t.name + " " + t.origin + " " + t.sport).toLowerCase().includes(filter.toLowerCase()));
 
   return (
     <div className="layout" style={{ position: "relative" }}>
@@ -268,9 +266,10 @@ export default function Dashboard() {
             <div key={t.id} className="card">
               <div className="templatePreview" style={{cursor:"pointer"}} onClick={()=>setPreviewTemplate(t)}>
                 <img
-                  src={`${apiUrl || ""}/api/templates/${t.id}/thumbnail?page=0&size=480`}
+                  src={`${apiUrl}/api/templates/${t.id}/thumbnail?page=0&size=320`}
                   alt={`Preview ${t.name}`}
                   loading="lazy"
+                  decoding="async"
                 />
               </div>
               <div style={{display:"flex", justifyContent:"space-between", gap:10}}>
@@ -333,11 +332,12 @@ export default function Dashboard() {
                   <div style={{ fontWeight: 900, marginBottom: 10, color: "var(--muted)" }}>Página {p + 1}</div>
                   <div style={{ borderRadius: 14, overflow: "hidden", border: "1px solid var(--border)" }}>
                     <img
-                      src={`${apiUrl || ""}/api/templates/${previewTemplate.id}/thumbnail?page=${p}&size=720`}
+                      src={`${apiUrl}/api/templates/${previewTemplate.id}/thumbnail?page=${p}&size=520`}
                       alt={`Preview page ${p + 1}`}
                       style={{ width: "100%", display: "block" }}
                       loading="lazy"
-                    />
+                  decoding="async"
+                />
                   </div>
                 </div>
               ))}
