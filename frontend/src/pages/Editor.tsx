@@ -508,73 +508,80 @@ export default function Editor() {
     if (!projectId || !doc?.pages?.[pageIndex]) return;
     const p = doc.pages[pageIndex];
 
-    // Use the existing overlay layer if present; that's what the UI toggles expect.
-    const layers = Array.isArray(p.layers) ? p.layers : [];
-    const overlayIdx = layers.findIndex(
-      (l: any) =>
-        l?.id === "overlay" || String(l?.name || "").toLowerCase().includes("detectado")
-    );
-
-    const overlay = overlayIdx >= 0 ? layers[overlayIdx] : null;
-    const already =
-      overlay &&
-      Array.isArray(overlay.items) &&
-      overlay.items.some((it: any) => String(it?.id || "").startsWith("detected_"));
-    if (already) return;
+    // Find existing detected/overlay layer (imported PDFs already have one called "overlay")
+    const getOverlayLayer = (pageObj: any) => {
+      const layers = pageObj.layers || [];
+      return (
+        layers.find((l: any) => l?.id === "overlay") ||
+        layers.find((l: any) => String(l?.name || "").toLowerCase().includes("detect")) ||
+        layers.find((l: any) => String(l?.id || "").toLowerCase().includes("detect"))
+      );
+    };
 
     try {
-      // ✅ Backend route is /api/projects/item/{project_id}/detect/{page_index}
+      // ✅ Backend route: /api/projects/item/{projectId}/detect/{page_index}
       const res = await api.post(`/api/projects/item/${projectId}/detect/${pageIndex}`);
-      const detected = (res.data && (res.data.detected || res.data)) || {};
+      const detected = (res.data?.detected ?? res.data) || {};
+      const meta = detected.meta || {};
 
-      const textItems = (detected.text || []).map((t: any, idx: number) => ({
-        id: `detected_text_${t.id ?? idx}`,
+      if (meta.ocr_needed) {
+        showToast("Este PDF parece escaneado (sin texto real). Para detectar texto exacto hace falta OCR.");
+      }
+
+      const toRect = (r: any) => {
+        // Backend v3: {x,y,w,h} already in A4 coords
+        if (r && typeof r.x === "number") return r;
+        // Backend v1 fallback: [x0,y0,x1,y1] in page coords (rare). If so, just map directly (better than breaking).
+        if (Array.isArray(r) && r.length === 4) {
+          const [x0, y0, x1, y1] = r.map((n) => Number(n) || 0);
+          return { x: x0, y: y0, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) };
+        }
+        return { x: 0, y: 0, w: 10, h: 10 };
+      };
+
+      const textItems = (detected.text || []).map((t: any) => ({
+        id: `detected_text_${t.id || uuid()}`,
         type: "TextFrame",
-        rect: { x: t.x, y: t.y, w: t.w, h: t.h },
-        text: t.text || "",
-        font: "Inter",
-        size: 14,
+        rect: toRect(t.rect),
+        text: Array.isArray(t.runs) ? t.runs : (t.text ?? ""),
+        styleRef: "Body",
+        padding: 6,
+        bg: t.bg_hex ? rgbaFromHex(t.bg_hex, 0.92) : (t.bg ? String(t.bg) : "rgba(255,255,255,0)"),
         color: t.color_hex || "#111827",
-        bg: rgbaFromHex(t.bg_hex || "#ffffff", 0.92),
-        bg_hex: t.bg_hex || "#ffffff",
+        role: "detected_text",
       }));
 
-      const imgItems = (detected.images || []).map((im: any, idx: number) => ({
-        id: `detected_img_${im.id ?? idx}`,
+      const imgItems = (detected.images || []).map((im: any) => ({
+        id: `detected_img_${im.id || uuid()}`,
         type: "ImageFrame",
-        rect: { x: im.x, y: im.y, w: im.w, h: im.h },
-        assetRef: im.asset_id || null,
+        rect: toRect(im.rect),
+        assetRef: im.asset_id || im.assetRef || null,
+        fitMode: "cover",
+        crop: { x: 0, y: 0, w: 1, h: 1 },
+        role: "detected_image",
       }));
 
       setDoc((prev: any) => {
         if (!prev) return prev;
-        const next = JSON.parse(JSON.stringify(prev));
-        const page = next.pages?.[pageIndex];
-        if (!page) return prev;
-        page.layers = Array.isArray(page.layers) ? page.layers : [];
+        const next = safeClone(prev);
+        const page = next.pages[pageIndex];
+        page.layers = page.layers || [];
 
-        // Ensure overlay layer exists and contains detected items.
-        let idxOverlay = page.layers.findIndex(
-          (l: any) =>
-            l?.id === "overlay" || String(l?.name || "").toLowerCase().includes("detectado")
-        );
-
-        const base = idxOverlay >= 0 ? page.layers[idxOverlay] : { id: "overlay", name: "Detectado", visible: true, locked: false, items: [] };
-        base.items = Array.isArray(base.items) ? base.items : [];
-
-        // Remove previous detected_* items then append fresh ones
-        base.items = base.items.filter((it: any) => !String(it?.id || "").startsWith("detected_"));
-        base.items.push(...textItems, ...imgItems);
-        base.visible = true;
-
-        if (idxOverlay >= 0) page.layers[idxOverlay] = base;
-        else page.layers.push(base);
-
+        let overlay = getOverlayLayer(page);
+        if (!overlay) {
+          overlay = { id: "overlay", name: "Detectado", visible: false, locked: false, items: [] };
+          page.layers.push(overlay);
+        }
+        overlay.items = [...textItems, ...imgItems];
+        // Keep detected layer hidden until user turns on toggles
+        overlay.visible = true;
         return next;
       });
-    } catch (e) {
+
+      showToast("Detección actualizada ✅");
+    } catch (e: any) {
       console.error(e);
-      showToast("No se pudo detectar texto/imágenes (API). Revisa backend/proxy.");
+      showToast("No se pudo detectar. Revisa backend y que el proyecto tenga PDF fuente.");
     }
   };
 
@@ -746,17 +753,51 @@ export default function Editor() {
 
   const onPickBackground = async (file: File) => {
     if (!page) return;
-    // find background item
-    const bg = (page.layers || [])
-      .flatMap((l: any) => l.items || [])
-      .find((it: any) => it.type === "ImageFrame" && (it.role === "page_background" || it.role === "pdf_background"));
-    if (!bg) {
-      showToast("Esta página no tiene fondo detectado");
-      return;
-    }
+
     try {
       const id = await uploadAsset(file);
-      updateItem(bg.id, { assetRef: id });
+
+      // Prefer a dedicated background layer if it exists; otherwise create one.
+      setDoc((prev: any) => {
+        if (!prev) return prev;
+        const next = safeClone(prev);
+        const p = next.pages?.[safePageIndex];
+        if (!p) return prev;
+
+        p.layers = p.layers || [];
+        let bgLayer =
+          p.layers.find((l: any) => String(l?.id || "").toLowerCase() === "bg") ||
+          p.layers.find((l: any) => String(l?.name || "").toLowerCase().includes("fondo")) ||
+          p.layers.find((l: any) => (l?.items || []).some((it: any) => it?.role === "page_background" || it?.role === "pdf_background"));
+
+        if (!bgLayer) {
+          bgLayer = { id: "bg", name: "Fondo", visible: true, locked: true, items: [] };
+          // insert at bottom
+          p.layers.unshift(bgLayer);
+        }
+
+        // Find existing background image item
+        let bgItem = (bgLayer.items || []).find((it: any) => it.type === "ImageFrame" && (it.role === "page_background" || it.role === "pdf_background"));
+        if (!bgItem) {
+          bgItem = {
+            id: uuid(),
+            type: "ImageFrame",
+            rect: { x: 0, y: 0, w: A4_W, h: A4_H },
+            assetRef: id,
+            fitMode: "cover",
+            crop: { x: 0, y: 0, w: 1, h: 1 },
+            locked: true,
+            role: "page_background",
+          };
+          bgLayer.items = bgLayer.items || [];
+          bgLayer.items.unshift(bgItem);
+        } else {
+          bgItem.assetRef = id;
+        }
+
+        return next;
+      });
+
       showToast("Fondo actualizado ✅");
     } catch (e) {
       console.error(e);
@@ -1213,8 +1254,7 @@ export default function Editor() {
               </button>
               <button
                 className="btn"
-                onClick={async () => {
-                  await ensureDetectedForPage(pageIndex);
+                onClick={() => {
                   setDetectTextByPage((m) => ({ ...m, [pageIndex]: true }));
                   setDetectImagesByPage((m) => ({ ...m, [pageIndex]: true }));
                 }}
@@ -1666,6 +1706,13 @@ export default function Editor() {
                   ref={rtDivRef}
                   contentEditable
                   suppressContentEditableWarning
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      // Force a real line break in PRO editor.
+                      e.preventDefault();
+                      try { document.execCommand("insertHTML", false, "<br/>"); } catch { /* ignore */ }
+                    }
+                  }}
                   style={{
                     marginTop: 12,
                     minHeight: 220,
