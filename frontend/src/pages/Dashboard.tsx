@@ -1,425 +1,335 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../store/auth";
-import { apiUrl } from "../config";
+import { useToast } from "../store/toast";
 
-type Template = { id: string; name: string; origin: string; sport: string; pages: number };
+type TemplateRow = {
+  id: string;
+  name: string;
+  origin: string;
+  sport: string;
+  pages: number;
+};
 
-function Toast({ msg }: { msg: string }) {
-  return <div className="toast">{msg}</div>;
+function getApiBase(): string {
+  const env = (import.meta as any)?.env?.VITE_API_BASE as string | undefined;
+  const v = (env || "").trim();
+  if (v) return v.replace(/\/$/, "");
+  return "";
+}
+
+function thumbUrl(id: string) {
+  const base = getApiBase();
+  return base ? `${base}/api/templates/${id}/thumbnail?scale=0.35` : `/api/templates/${id}/thumbnail?scale=0.35`;
 }
 
 export default function Dashboard() {
   const nav = useNavigate();
-  const { clubs, activeClubId, setActiveClub, loadClubs } = useAuth();
+  const { token, clubs, activeClubId, setActiveClub, loadClubs, loadMe } = useAuth();
+  const { showToast } = useToast();
 
-  const [templates, setTemplates] = useState<Template[]>([]);
-  const [previewTemplate, setPreviewTemplate] = useState<Template | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [templates, setTemplates] = useState<TemplateRow[]>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
 
-  const [filter, setFilter] = useState("");
-  const [style, setStyle] = useState("minimal_premium");
-  const [sport, setSport] = useState("football");
+  const [q, setQ] = useState("");
+  const [previewTemplateId, setPreviewTemplateId] = useState<string | null>(null);
 
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [genOptions, setGenOptions] = useState<any[] | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importMsg, setImportMsg] = useState("");
 
-  const [isImporting, setIsImporting] = useState(false);
-  const [importMsg, setImportMsg] = useState<string | null>(null);
+  const fileSafeRef = useRef<HTMLInputElement | null>(null);
+  const fileEditRef = useRef<HTMLInputElement | null>(null);
 
-  const activeClub = useMemo(
-    () => clubs.find((c) => c.id === activeClubId) || null,
-    [clubs, activeClubId]
-  );
-
-  const showToast = (m: string, ms = 2600) => {
-    setToast(m);
-    window.setTimeout(() => setToast(null), ms);
-  };
+  const activeClub = useMemo(() => {
+    if (!clubs?.length) return null;
+    return clubs.find((c) => c.id === activeClubId) || clubs[0] || null;
+  }, [clubs, activeClubId]);
 
   async function loadTemplates() {
+    if (!token) return;
+    setLoadingTemplates(true);
     try {
-      // Backend must expose GET /api/templates (list)
-      const { data } = await api.get("/api/templates");
-      setTemplates(Array.isArray(data) ? data : data?.templates || []);
+      const r = await api.get<TemplateRow[]>("/api/templates");
+      setTemplates(Array.isArray(r.data) ? r.data : []);
     } catch (e: any) {
-      const detail =
-        e?.response?.data?.detail ||
-        e?.message ||
-        "No se pudieron cargar las plantillas (API)";
-      showToast(detail, 3500);
       setTemplates([]);
+      showToast("No se pudieron cargar las plantillas (API). Revisa backend/proxy.", "error");
+    } finally {
+      setLoadingTemplates(false);
     }
   }
 
   useEffect(() => {
+    if (!token) return;
+    loadMe();
+    loadClubs();
     loadTemplates();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function createClubQuick() {
-    const name = prompt("Nombre del club:", "Mi Club") || "Mi Club";
-    try {
-      const res = await api.post("/api/clubs", { name, sport: "football", language: "es" });
-      setActiveClub(res.data.id);
-      await loadClubs();
-      showToast("Club creado ✅");
-    } catch (e: any) {
-      showToast(e?.response?.data?.detail || "No se pudo crear el club");
-    }
-  }
-
-  async function uploadLockedLogo() {
-    if (!activeClubId) {
-      showToast("Primero crea/selecciona un club");
-      return;
-    }
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "image/*";
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      const fd = new FormData();
-      fd.append("file", file);
-      try {
-        await api.post(`/api/clubs/${activeClubId}/locked-logo`, fd, {
-          timeout: 0,
-        });
-        await loadClubs();
-        showToast("Logo portada actualizado ✅");
-      } catch (e: any) {
-        showToast(e?.response?.data?.detail || "No se pudo subir el logo", 3500);
-      }
-    };
-    input.click();
-  }
-
-  async function createProjectFromTemplate(t: Template) {
-    if (!activeClubId) {
-      showToast("Primero crea/selecciona un club");
-      return;
-    }
-    try {
-      const { data } = await api.post(`/api/projects/${activeClubId}`, {
-        name: `Revista - ${t.name}`,
-        template_id: t.id,
-      });
-      nav(`/editor/${data.id}`);
-    } catch (e: any) {
-      showToast(e?.response?.data?.detail || "No se pudo crear el proyecto (API)", 3500);
-    }
-  }
-
-  async function importPdf(mode: string) {
-    if (!activeClubId) {
-      showToast("Primero crea/selecciona un club");
-      return;
-    }
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "application/pdf";
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-
-      const fd = new FormData();
-      fd.append("file", file);
-
-      try {
-        setIsImporting(true);
-        setImportMsg("Cargando PDF… Esto puede tardar 20–90s (según páginas).");
-        showToast("Cargando PDF…", 4000);
-
-        // Import background only; text/images are detected on-demand per page inside the editor
-        const { data } = await api.post(
-          `/api/import/${activeClubId}?mode=${mode}&preset=background`,
-          fd,
-          {
-            timeout: 0,
-            maxBodyLength: Infinity as any,
-            maxContentLength: Infinity as any,
-          }
-        );
-
-        const pid = data?.project_id || data?.projectId || data?.id;
-        if (!pid) throw new Error("Respuesta inválida: no llegó project_id");
-
-        setImportMsg("PDF importado ✅ Abriendo editor…");
-        // Pequeño delay para evitar sensación de “click y error” en Render cuando el proyecto acaba de guardarse
-        await new Promise((r) => setTimeout(r, 300));
-        nav(`/editor/${pid}`);
-      } catch (e: any) {
-        const detail =
-          e?.response?.data?.detail ||
-          e?.message ||
-          "No se pudo importar el PDF";
-        showToast(detail, 4500);
-      } finally {
-        setIsImporting(false);
-        window.setTimeout(() => setImportMsg(null), 1200);
-      }
-    };
-    input.click();
-  }
-
-  async function generateTemplates() {
-    if (!activeClubId) {
-      showToast("Primero crea/selecciona un club");
-      return;
-    }
-    try {
-      setIsGenerating(true);
-      setGenOptions(null);
-      const { data } = await api.post("/api/templates/generate", { sport, style });
-      setGenOptions(data?.options || []);
-      showToast("Opciones generadas ✅");
-    } catch (e: any) {
-      showToast(e?.response?.data?.detail || "No se pudieron generar opciones", 3500);
-    } finally {
-      setIsGenerating(false);
-    }
-  }
-
-  async function saveGenerated(option: any) {
-    if (!activeClubId) return;
-    try {
-      const { data } = await api.post("/api/templates/save-generated", {
-        name: option?.name || "Plantilla generada",
-        sport,
-        document: option?.document,
-      });
-      showToast("Plantilla guardada ✅");
-      setGenOptions(null);
-      // recargar catálogo para mostrar las nuevas
-      await loadTemplates();
-      // si quieres, auto-abrir
-      // await createProjectFromTemplate(data);
-    } catch (e: any) {
-      showToast(e?.response?.data?.detail || "No se pudo guardar la plantilla", 3500);
-    }
-  }
+  }, [token]);
 
   const filtered = useMemo(() => {
-    const q = filter.trim().toLowerCase();
-    if (!q) return templates;
-    return templates.filter((t) => (t.name || "").toLowerCase().includes(q));
-  }, [templates, filter]);
+    const s = q.trim().toLowerCase();
+    if (!s) return templates;
+    return templates.filter((t) => (t.name || "").toLowerCase().includes(s) || (t.sport || "").toLowerCase().includes(s));
+  }, [templates, q]);
+
+  async function quickCreateClub() {
+    try {
+      const r = await api.post("/api/clubs/quick", {});
+      await loadClubs();
+      setActiveClub(r.data?.id);
+      showToast("Club creado. Ya puedes usar plantillas o importar PDF.", "success");
+    } catch (e: any) {
+      showToast("No se pudo crear el club.", "error");
+    }
+  }
+
+  function startImport(mode: "safe" | "editable") {
+    if (!activeClub?.id) {
+      showToast("Primero crea o selecciona un club.", "error");
+      return;
+    }
+    if (mode === "safe") fileSafeRef.current?.click();
+    else fileEditRef.current?.click();
+  }
+
+  async function doImport(file: File, mode: "safe" | "editable") {
+    if (!activeClub?.id) return;
+
+    setImportBusy(true);
+    setImportMsg("Cargando PDF… Esto puede tardar 20–90s (según páginas).");
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await api.post(`/api/import/pdf?club_id=${activeClub.id}&mode=${mode}`, fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 5 * 60 * 1000,
+      });
+      const projectId = r.data?.project_id || r.data?.id;
+      if (!projectId) throw new Error("No project_id");
+      showToast("PDF importado. Abriendo editor…", "success");
+      nav(`/editor/${projectId}`);
+    } catch (e: any) {
+      showToast("No se pudo cargar el proyecto (API). Revisa backend/proxy.", "error");
+    } finally {
+      setImportBusy(false);
+      setImportMsg("");
+      // reset input value so same file can be re-picked
+      if (fileSafeRef.current) fileSafeRef.current.value = "";
+      if (fileEditRef.current) fileEditRef.current.value = "";
+    }
+  }
+
+  async function useTemplate(tpl: TemplateRow) {
+    if (!activeClub?.id) {
+      showToast("Primero crea o selecciona un club.", "error");
+      return;
+    }
+    try {
+      const r = await api.post("/api/projects", { club_id: activeClub.id, template_id: tpl.id });
+      const projectId = r.data?.id;
+      showToast("Proyecto creado. Abriendo editor…", "success");
+      nav(`/editor/${projectId}`);
+    } catch (e: any) {
+      showToast("No se pudo crear el proyecto (API).", "error");
+    }
+  }
 
   return (
-    <div className="page">
-      {toast ? <Toast msg={toast} /> : null}
-
-      {/* Import overlay */}
-      {isImporting && (
+    <div className="layout">
+      {/* Overlay de carga */}
+      {importBusy && (
         <div className="overlay">
           <div className="overlayCard">
-            <div className="overlayTitle">Cargando PDF…</div>
-            <div className="overlayText">
-              {importMsg ||
-                "Procesando el PDF y preparando las páginas. No cierres esta pestaña."}
-            </div>
-            <div className="overlayHint">
-              Si es un PDF grande, puede tardar. Cuando termine, se abrirá el editor.
+            <div className="spinner" />
+            <div>
+              <div style={{ fontWeight: 800, marginBottom: 6 }}>Cargando PDF…</div>
+              <div style={{ opacity: 0.85, fontSize: 13 }}>{importMsg || "Procesando…"}</div>
             </div>
           </div>
         </div>
       )}
 
-      <div className="grid">
-        <div className="card">
-          <h3 style={{ marginTop: 0 }}>Tu club</h3>
+      {/* SIDEBAR */}
+      <aside className="sidebar">
+        <div className="panel">
+          <div className="h2">Tu club</div>
 
-          <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
-            <button className="btn" onClick={createClubQuick}>
-              Crear club rápido
-            </button>
-
-            <div className="field" style={{ minWidth: 260 }}>
-              <label>Seleccionar club</label>
+          {!clubs?.length ? (
+            <>
+              <div className="muted" style={{ marginTop: 8 }}>
+                Crea tu club para empezar.
+              </div>
+              <button className="btn btnTopPrimary" style={{ marginTop: 12 }} onClick={quickCreateClub}>
+                Crear club
+              </button>
+            </>
+          ) : (
+            <>
+              <label className="label" style={{ marginTop: 10 }}>
+                Seleccionar club
+              </label>
               <select
+                className="input"
                 value={activeClubId || ""}
                 onChange={(e) => setActiveClub(e.target.value)}
               >
-                <option value="" disabled>
-                  -- selecciona --
-                </option>
                 {clubs.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name} ({c.plan || "free"})
+                    {c.name}
                   </option>
                 ))}
               </select>
-            </div>
 
-            <button className="btn" onClick={uploadLockedLogo} disabled={!activeClubId}>
-              Logo portada (bloqueado)
-            </button>
-
-            <button
-              className="btn"
-              onClick={() => showToast("PRO activado (dev)")}
-              title="Modo PRO en desarrollo"
-            >
-              Activar PRO (dev)
-            </button>
-          </div>
-
-          <p style={{ color: "var(--muted)" }}>
-            El logo bloqueado siempre se renderiza en la portada y no se puede editar.
-          </p>
+              <div className="muted" style={{ marginTop: 10 }}>
+                El logo bloqueado siempre se renderiza en la portada y no se puede editar.
+              </div>
+            </>
+          )}
         </div>
 
-        <div className="card">
-          <h3 style={{ marginTop: 0 }}>Crear revista</h3>
-          <p style={{ color: "var(--muted)", marginTop: 0 }}>
-            Elige plantilla nativa (40 páginas) o importa un PDF.
-          </p>
-          <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
-            <button className="btn primary" onClick={() => importPdf("safe")} disabled={isImporting}>
-              {isImporting ? "Cargando PDF…" : "Importar PDF (modo seguro)"}
-            </button>
-            <button className="btn" onClick={() => importPdf("editable")} disabled={isImporting}>
-              {isImporting ? "Cargando PDF…" : "Importar PDF (editable)"}
+        <div className="panel" style={{ marginTop: 14 }}>
+          <div className="h2">Crear revista</div>
+          <div className="muted" style={{ marginTop: 6 }}>
+            Elige plantilla nativa o importa un PDF.
+          </div>
+
+          <div className="row" style={{ marginTop: 12 }}>
+            <button className="btn btnTopPrimary" disabled={importBusy} onClick={() => startImport("safe")}>
+              {importBusy ? "Cargando…" : "Importar PDF (modo seguro)"}
             </button>
           </div>
+          <div className="row" style={{ marginTop: 10 }}>
+            <button className="btn btnTop" disabled={importBusy} onClick={() => startImport("editable")}>
+              {importBusy ? "Cargando…" : "Importar PDF (editable)"}
+            </button>
+          </div>
+
+          <input
+            ref={fileSafeRef}
+            type="file"
+            accept="application/pdf"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) doImport(f, "safe");
+            }}
+          />
+          <input
+            ref={fileEditRef}
+            type="file"
+            accept="application/pdf"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) doImport(f, "editable");
+            }}
+          />
         </div>
 
-        <div className="card">
-          <h3 style={{ marginTop: 0 }}>Generar plantilla (distinta)</h3>
-          <p style={{ color: "var(--muted)", marginTop: 0 }}>
-            Genera 3 opciones nativas de 40 páginas. Elige una y guárdala.
-          </p>
-
-          <div className="row" style={{ gap: 12, flexWrap: "wrap", alignItems: "end" }}>
-            <div className="field">
-              <label>Deporte</label>
-              <select value={sport} onChange={(e) => setSport(e.target.value)}>
-                <option value="football">Fútbol</option>
-                <option value="basket">Basket</option>
-              </select>
-            </div>
-
-            <div className="field">
-              <label>Estilo (estructura)</label>
-              <select value={style} onChange={(e) => setStyle(e.target.value)}>
-                <option value="minimal_premium">Minimal premium</option>
-                <option value="bold_modern">Bold modern</option>
-                <option value="classic_mag">Classic magazine</option>
-              </select>
-            </div>
-
-            <button className="btn primary" onClick={generateTemplates} disabled={isGenerating}>
-              {isGenerating ? "Generando…" : "Generar 3 opciones"}
-            </button>
+        <div className="panel" style={{ marginTop: 14 }}>
+          <div className="h2">Generar plantilla (distinta)</div>
+          <div className="muted" style={{ marginTop: 6 }}>
+            Genera 3 opciones nativas. Elige una y guárdala.
           </div>
 
-          {genOptions?.length ? (
-            <div style={{ marginTop: 12 }} className="templatesGrid">
-              {genOptions.map((opt, idx) => (
-                <div key={idx} className="templateCard">
-                  <div className="templateTitle">{opt?.name || `Opción ${idx + 1}`}</div>
-                  <div className="templateMeta">Generada · {sport}</div>
-                  <div className="templateActions">
-                    <button className="btn" onClick={() => saveGenerated(opt)}>
-                      Guardar
-                    </button>
+          {/* Nota: si ya tienes generator, puedes conectar aquí. */}
+          <div className="muted" style={{ marginTop: 10 }}>
+            (Opcional) Puedes usar el generador desde el panel central.
+          </div>
+        </div>
+      </aside>
+
+      {/* MAIN */}
+      <section className="main">
+        <div className="panel">
+          <div className="templatesHeader">
+            <div>
+              <div className="h1">Plantillas</div>
+              <div className="muted">Catálogo + Generadas</div>
+            </div>
+            <div className="templatesSearch">
+              <input
+                className="input"
+                placeholder="Buscar plantilla…"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {loadingTemplates ? (
+            <div className="templates" style={{ marginTop: 16 }}>
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="templateCard">
+                  <div className="templatePreview skeleton" />
+                  <div className="templateMeta">
+                    <div className="templateTitle skeleton" style={{ height: 16, width: "70%" }} />
+                    <div className="muted skeleton" style={{ height: 12, width: "40%", marginTop: 10 }} />
                   </div>
                 </div>
               ))}
             </div>
-          ) : null}
-        </div>
-
-        <div className="card">
-          <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-            <div>
-              <h2 style={{ margin: 0 }}>Plantillas</h2>
-              <div style={{ color: "var(--muted)" }}>Catálogo + Generadas</div>
+          ) : filtered.length ? (
+            <div className="templates" style={{ marginTop: 16 }}>
+              {filtered.map((tpl) => (
+                <div key={tpl.id} className="templateCard">
+                  <div className="templatePreview">
+                    <img src={thumbUrl(tpl.id)} alt={tpl.name} />
+                  </div>
+                  <div className="templateMeta">
+                    <div className="templateTitle">{tpl.name}</div>
+                    <div className="muted" style={{ marginTop: 6 }}>
+                      {tpl.sport} · {tpl.pages} páginas
+                    </div>
+                    <div className="row" style={{ marginTop: 12 }}>
+                      <button className="btn btnTop" onClick={() => setPreviewTemplateId(tpl.id)}>
+                        Previsualizar
+                      </button>
+                      <button className="btn btnTopPrimary" onClick={() => useTemplate(tpl)}>
+                        Usar plantilla
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
-
-            <div className="field" style={{ minWidth: 280 }}>
-              <label>Buscar plantilla</label>
-              <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Buscar plantilla…" />
-            </div>
-          </div>
-
-          {filtered.length === 0 ? (
-            <div style={{ marginTop: 12, color: "var(--muted)" }}>
+          ) : (
+            <div className="muted" style={{ marginTop: 16 }}>
               No hay plantillas para mostrar. Si acabas de desplegar, revisa que el backend tenga el endpoint{" "}
               <code>GET /api/templates</code>.
             </div>
+          )}
+        </div>
+      </section>
+
+      {/* RIGHT: Preview */}
+      <aside className="right">
+        <div className="panel">
+          <div className="h2">Previsualización</div>
+          <div className="muted" style={{ marginTop: 6 }}>
+            Selecciona una plantilla y dale a “Previsualizar”.
+          </div>
+
+          {previewTemplateId ? (
+            <div style={{ marginTop: 12 }}>
+              <div className="templatePreviewBig">
+                <img src={thumbUrl(previewTemplateId).replace("scale=0.35", "scale=0.7")} alt="preview" />
+              </div>
+              <div className="row" style={{ marginTop: 12 }}>
+                <button className="btn btnTop" onClick={() => setPreviewTemplateId(null)}>
+                  Cerrar
+                </button>
+              </div>
+            </div>
           ) : (
-            <div className="templatesGrid" style={{ marginTop: 12 }}>
-              {filtered.map((t) => (
-                <div key={t.id} className="templateCard">
-                  <div
-                    className="templatePreview"
-                    style={{ cursor: "pointer" }}
-                    onClick={() => setPreviewTemplate(t)}
-                    title="Ver preview"
-                  >
-                    <img
-                      src={apiUrl(`/api/templates/${t.id}/thumbnail?page=0&size=560`)}
-                      alt={`Preview ${t.name}`}
-                      loading="lazy"
-                    />
-                  </div>
-
-                  <div className="templateBody">
-                    <div className="templateTitle">{t.name}</div>
-                    <div className="templateMeta">
-                      {t.origin} · {t.sport} · {t.pages} páginas
-                    </div>
-
-                    <div className="templateActions">
-                      <button className="btn primary" onClick={() => createProjectFromTemplate(t)}>
-                        Usar esta plantilla
-                      </button>
-                      <button className="btn" onClick={() => setPreviewTemplate(t)}>
-                        Previsualizar
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
+            <div className="muted" style={{ marginTop: 12 }}>
+              Sin selección.
             </div>
           )}
         </div>
-      </div>
-
-      {/* Simple preview modal */}
-      {previewTemplate ? (
-        <div className="modalBackdrop" onClick={() => setPreviewTemplate(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <div style={{ fontWeight: 800 }}>{previewTemplate.name}</div>
-                <div style={{ color: "var(--muted)" }}>
-                  {previewTemplate.origin} · {previewTemplate.sport} · {previewTemplate.pages} páginas
-                </div>
-              </div>
-              <button className="btn" onClick={() => setPreviewTemplate(null)}>
-                Cerrar
-              </button>
-            </div>
-
-            <div className="modalPreview">
-              <img
-                src={apiUrl(`/api/templates/${previewTemplate.id}/thumbnail?page=0&size=900`)}
-                alt="preview"
-              />
-            </div>
-
-            <div className="row" style={{ justifyContent: "flex-end", marginTop: 12 }}>
-              <button className="btn primary" onClick={() => createProjectFromTemplate(previewTemplate)}>
-                Usar esta plantilla
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      </aside>
     </div>
   );
 }
