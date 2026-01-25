@@ -1,72 +1,69 @@
-import axios, {
-  type AxiosInstance,
-  type AxiosResponse,
-  type InternalAxiosRequestConfig,
-} from "axios";
+import axios, { AxiosHeaders, InternalAxiosRequestConfig } from "axios";
 
 /**
- * Base URL del backend (Render/Neon/Supabase, etc.)
- * - En producción se inyecta con VITE_API_BASE en el build.
- * - Ej: https://revista-2-1.onrender.com
+ * API base URL. In Render you usually set VITE_API_BASE to the BACKEND url:
+ *   https://<your-backend>.onrender.com
+ *
+ * Some users accidentally set it to .../api . To be resilient, we auto-rewrite
+ * requests that start with /api when baseURL already ends with /api.
  */
-export const API_BASE: string = String((import.meta as any)?.env?.VITE_API_BASE || "")
-  .trim()
-  .replace(/\/$/, "");
+const RAW_BASE = ((import.meta as any).env?.VITE_API_BASE as string) || "";
+const BASE = (RAW_BASE || "").trim().replace(/\/+$/, "");
 
-/** Une API_BASE + path, cuidando slashes. */
-export function apiUrl(path: string = ""): string {
-  const p = path.startsWith("/") ? path : `/${path}`;
-  if (!API_BASE) return p; // fallback (dev proxy)
-  return `${API_BASE}${p}`;
+export const API_BASE = BASE;
+
+/** Build an absolute URL pointing to the backend (useful for thumbnails/assets). */
+export function apiUrl(path: string): string {
+  if (!path) return BASE;
+  if (!BASE) return path;
+  if (/^https?:\/\//i.test(path)) return path;
+  if (path.startsWith("/")) return `${BASE}${path}`;
+  return `${BASE}/${path}`;
 }
 
-const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 min (import PDF puede tardar)
+const TOKEN_KEY = "token";
 
-/**
- * Axios instance usado en todo el frontend.
- * OJO: en el código se llaman rutas tipo "/api/..."
- */
-export const api: AxiosInstance = axios.create({
-  baseURL: API_BASE || "", // si está vacío, en dev puede usarse proxy
-  timeout: DEFAULT_TIMEOUT_MS,
+export function getToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setToken(token: string | null) {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+export const api = axios.create({
+  baseURL: BASE || undefined,
+  timeout: 120000,
 });
 
-/** Token helpers (compatibles con código previo). */
-const TOKEN_KEY = "token";
-export function getToken(): string {
-  return localStorage.getItem(TOKEN_KEY) || "";
-}
-export function setToken(token: string) {
-  if (token) localStorage.setItem(TOKEN_KEY, token);
-  else localStorage.removeItem(TOKEN_KEY);
-}
-export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY);
-}
-
 /**
- * Interceptor de request:
- * - Adjunta Authorization si hay token
- * - Evita el error TS2322 (no reasignar headers a {} tipado)
+ * Request interceptor:
+ * - attach Authorization Bearer token
+ * - rewrite /api prefix if BASE already ends with /api
  */
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  const t = getToken();
-  if (t) {
-    // Axios v1 usa AxiosHeaders internamente; para evitar TS, tratamos como any.
-    const headers: any = (config.headers ?? {}) as any;
-    headers["Authorization"] = `Bearer ${t}`;
-    config.headers = headers;
+  const token = getToken();
+  if (token) {
+    if (!config.headers) config.headers = new AxiosHeaders();
+    (config.headers as AxiosHeaders).set("Authorization", `Bearer ${token}`);
   }
+
+  // If baseURL already ends with /api, avoid calling /api/api/...
+  const b = (config.baseURL ?? api.defaults.baseURL ?? "").toString().replace(/\/+$/, "");
+  const baseHasApi = /\/api$/i.test(b);
+  if (baseHasApi && typeof config.url === "string") {
+    if (config.url.startsWith("/api/")) config.url = config.url.slice(4); // remove "/api"
+    else if (config.url === "/api") config.url = ""; // edge case
+  }
+
   return config;
 });
-
-/**
- * Helper: devuelve data directamente si quieres usarlo (opcional).
- */
-export async function unwrap<T>(p: Promise<AxiosResponse<T>>): Promise<T> {
-  const r = await p;
-  return r.data;
-}
-
-// Compatibilidad por si algún archivo hacía `import api from "../lib/api"`
-export default api;
