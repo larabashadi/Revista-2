@@ -1,32 +1,72 @@
-import axios, { AxiosInstance } from "axios";
+import axios, {
+  type AxiosInstance,
+  type AxiosResponse,
+  type InternalAxiosRequestConfig,
+} from "axios";
 
-// Vite only exposes env vars prefixed with VITE_.
-// IMPORTANT: env values are embedded at build-time.
-const raw = (import.meta as any).env?.VITE_API_BASE || "";
+/**
+ * Base URL del backend (Render/Neon/Supabase, etc.)
+ * - En producción se inyecta con VITE_API_BASE en el build.
+ * - Ej: https://revista-2-1.onrender.com
+ */
+export const API_BASE: string = String((import.meta as any)?.env?.VITE_API_BASE || "")
+  .trim()
+  .replace(/\/$/, "");
 
-// Normalize: remove trailing slashes to avoid "//api".
-export const apiUrl: string = String(raw).replace(/\/+$/, "");
+/** Une API_BASE + path, cuidando slashes. */
+export function apiUrl(path: string = ""): string {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  if (!API_BASE) return p; // fallback (dev proxy)
+  return `${API_BASE}${p}`;
+}
 
-// If apiUrl is empty, we fall back to same-origin.
-// This is useful when serving frontend through the backend.
-const baseURL = apiUrl || "";
+const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 min (import PDF puede tardar)
 
+/**
+ * Axios instance usado en todo el frontend.
+ * OJO: en el código se llaman rutas tipo "/api/..."
+ */
 export const api: AxiosInstance = axios.create({
-  baseURL,
-  timeout: 120000, // 2 minutes for PDF/import/export operations
+  baseURL: API_BASE || "", // si está vacío, en dev puede usarse proxy
+  timeout: DEFAULT_TIMEOUT_MS,
 });
 
-// Attach token if present.
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("token");
-  if (token) {
-    config.headers = config.headers || {};
-    (config.headers as any)["Authorization"] = `Bearer ${token}`;
+/** Token helpers (compatibles con código previo). */
+const TOKEN_KEY = "token";
+export function getToken(): string {
+  return localStorage.getItem(TOKEN_KEY) || "";
+}
+export function setToken(token: string) {
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+export function clearToken() {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+/**
+ * Interceptor de request:
+ * - Adjunta Authorization si hay token
+ * - Evita el error TS2322 (no reasignar headers a {} tipado)
+ */
+api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+  const t = getToken();
+  if (t) {
+    // Axios v1 usa AxiosHeaders internamente; para evitar TS, tratamos como any.
+    const headers: any = (config.headers ?? {}) as any;
+    headers["Authorization"] = `Bearer ${t}`;
+    config.headers = headers;
   }
   return config;
 });
 
-export function setToken(token: string | null) {
-  if (token) localStorage.setItem("token", token);
-  else localStorage.removeItem("token");
+/**
+ * Helper: devuelve data directamente si quieres usarlo (opcional).
+ */
+export async function unwrap<T>(p: Promise<AxiosResponse<T>>): Promise<T> {
+  const r = await p;
+  return r.data;
 }
+
+// Compatibilidad por si algún archivo hacía `import api from "../lib/api"`
+export default api;
