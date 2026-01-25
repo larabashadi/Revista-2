@@ -1,96 +1,130 @@
-// frontend/src/store/auth.ts
 import { create } from "zustand";
-import api, { setToken, getToken } from "../lib/api";
+import api, { setToken } from "../lib/api";
+
+export type Plan = "free" | "base" | "pro" | "enterprise";
 
 export type User = {
-  id: number;
+  id: string;
   email: string;
-  role: string;
+  name?: string | null;
+  is_admin: boolean;
+  created_at?: string;
 };
 
 export type Club = {
-  id: number;
+  id: string;
+  owner_user_id?: string;
   name: string;
-  // backend usa snake_case
+  logo_asset_id?: string | null;
   locked_logo_asset_id?: string | null;
+  chosen_template_id?: string | null;
+  allow_export?: boolean;
+  plan?: Plan;
+  created_at?: string;
 };
 
-type AuthState = {
+type RegisterPayload = {
+  email: string;
+  password: string;
+  clubName?: string;
+  clubLogoBase64?: string;
+};
+
+export type AuthState = {
   token: string | null;
   user: User | null;
-  clubs: Club[];
-  isReady: boolean;
 
-  login: (email: string, password: string) => Promise<User>;
+  clubs: Club[];
+  activeClubId: string | null;
+
+  setActiveClub: (clubId: string | null) => void;
+  activeClub: () => Club | null;
+
+  login: (email: string, password: string) => Promise<void>;
+  register: (payload: RegisterPayload) => Promise<void>;
   logout: () => void;
 
   loadMe: () => Promise<void>;
   loadClubs: () => Promise<void>;
-  init: () => Promise<void>;
 };
 
 export const useAuth = create<AuthState>((set, get) => ({
-  token: getToken(),
+  token: localStorage.getItem("token"),
   user: null,
+
   clubs: [],
-  isReady: false,
+  activeClubId: localStorage.getItem("activeClubId"),
 
-  async login(email: string, password: string) {
-    // FastAPI OAuth2PasswordRequestForm => x-www-form-urlencoded con "username"
-    const body = new URLSearchParams();
-    body.set("username", email);
-    body.set("password", password);
+  setActiveClub: (clubId) => {
+    if (clubId) localStorage.setItem("activeClubId", clubId);
+    else localStorage.removeItem("activeClubId");
+    set({ activeClubId: clubId });
+  },
 
-    const res = await api.post("/auth/login", body, {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    });
+  activeClub: () => {
+    const id = get().activeClubId;
+    if (!id) return null;
+    return get().clubs.find((c) => c.id === id) ?? null;
+  },
 
-    const token = (res.data as any)?.access_token;
-    if (!token) throw new Error("Login: no se recibió access_token");
+  login: async (email, password) => {
+    const res = await api.post("/api/auth/login", { email, password });
+    const { token, user } = res.data as { token: string; user: User };
 
     setToken(token);
-    set({ token });
+    set({ token, user });
 
-    // Carga perfil
-    await get().loadMe();
     await get().loadClubs();
-
-    const u = get().user;
-    if (!u) throw new Error("Login: no se pudo cargar el usuario");
-    return u;
   },
 
-  logout() {
+  register: async (payload) => {
+    const res = await api.post("/api/auth/register", payload);
+    const { token, user } = res.data as { token: string; user: User };
+
+    setToken(token);
+    set({ token, user });
+
+    await get().loadClubs();
+  },
+
+  logout: () => {
     setToken(null);
-    set({ token: null, user: null, clubs: [], isReady: true });
+    localStorage.removeItem("activeClubId");
+    set({
+      token: null,
+      user: null,
+      clubs: [],
+      activeClubId: null,
+    });
   },
 
-  async loadMe() {
-    const token = get().token ?? getToken();
-    if (!token) return;
-
-    const me = await api.get("/auth/me");
-    set({ user: me.data });
-  },
-
-  async loadClubs() {
-    const token = get().token ?? getToken();
-    if (!token) return;
-
-    const { data } = await api.get("/clubs");
-    set({ clubs: Array.isArray(data) ? data : [] });
-  },
-
-  async init() {
-    try {
-      const token = getToken();
-      if (token) {
-        set({ token });
-        await get().loadMe();
-        await get().loadClubs();
-      }
-    } finally {
-      set({ isReady: true });
+  loadMe: async () => {
+    const t = get().token ?? localStorage.getItem("token");
+    if (!t) {
+      set({ user: null, token: null });
+      return;
     }
+
+    setToken(t);
+    const res = await api.get("/api/auth/me");
+    set({ user: res.data as User, token: t });
+  },
+
+  loadClubs: async () => {
+    const res = await api.get("/api/clubs");
+    const clubs = (res.data ?? []) as Club[];
+
+    set({ clubs });
+
+    const current = get().activeClubId || localStorage.getItem("activeClubId");
+    const next =
+      current && clubs.some((c) => c.id === current)
+        ? current
+        : clubs[0]?.id ?? null;
+
+    if (next) localStorage.setItem("activeClubId", next);
+    else localStorage.removeItem("activeClubId");
+
+    set({ activeClubId: next });
   },
 }));
