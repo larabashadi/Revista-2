@@ -24,6 +24,10 @@ const safeClone = <T,>(obj: T): T => {
 
 function loadImg(url: string, onError?: () => void): HTMLImageElement {
   const img = new Image();
+  const img = new window.Image();
+img.crossOrigin = "anonymous";
+img.src = apiUrl(`/api/assets/file/${assetId}`);
+
   // Only set crossOrigin for remote http(s) images.
   // Setting it for data:/blob: can break rendering in some browsers.
   if (/^https?:\/\//i.test(url)) {
