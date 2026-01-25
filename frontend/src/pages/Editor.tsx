@@ -235,10 +235,8 @@ export default function Editor() {
         setSelectedId(null);
       } catch (e: any) {
         console.error(e);
-        const status = e?.response?.status;
-        const detail = e?.response?.data?.detail || e?.message || "";
-        setToast(`No se pudo cargar el proyecto (API)${status ? " ["+status+"]" : ""}. ${detail}`.trim());
-        }
+        setToast("No se pudo cargar el proyecto (API). Revisa backend/proxy.");
+      }
     })();
   }, [projectId]);
 
@@ -393,14 +391,12 @@ export default function Editor() {
   }, [projectId, doc, pageIndex]);
 
 
-  const newId = (prefix?: string) => {
+  const newId = () => {
     try {
       // @ts-ignore
-      const base = crypto?.randomUUID?.() || `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-      return prefix ? `${prefix}_${base}` : base;
+      return crypto?.randomUUID?.() || `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     } catch {
-      const base = `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-      return prefix ? `${prefix}_${base}` : base;
+      return `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     }
   };
 
@@ -1025,6 +1021,9 @@ export default function Editor() {
 
       // background items should not be draggable; selection via button
       const isBg = it.role === "pdf_background" || it.role === "page_background";
+                    const isPdfBg = it.role === "pdf_background";
+                    const imgOpacity = isPdfBg ? 1 : (it.opacity ?? 1);
+                    const bgFill = isPdfBg ? "#ffffff" : (isBg ? "#0b1220" : "transparent");
 
       return (
         <Group
@@ -1049,7 +1048,7 @@ export default function Editor() {
           }}
           onDragEnd={(e) => updateItemRect(id, { x: e.target.x(), y: e.target.y() })}
         >
-          <Rect width={r.w} height={r.h} fill={isBg ? "#0b1220" : "#eef2ff"} opacity={it.opacity ?? 1} />
+          <Rect width={r.w} height={r.h} fill={isBg ? "#0b1220" : "#eef2ff"} opacity={imgOpacity} />
           {img ? <KImage image={img} width={r.w} height={r.h} opacity={it.opacity ?? 1} /> : null}
           {!img && !isBg ? (
             <Text text="Imagen" x={10} y={10} fontSize={14} fill="#64748b" />
