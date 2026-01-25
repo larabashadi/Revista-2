@@ -23,27 +23,17 @@ const safeClone = <T,>(obj: T): T => {
 };
 
 function loadImg(url: string, onError?: () => void): HTMLImageElement {
- const imageEl = await loadAssetImage(assetRef);
-
-imageEl.crossOrigin = "anonymous";
-imageEl.src = apiUrl(`/api/assets/file/${id}`);
-
- 
-
- // Only set crossOrigin for remote http(s) images.
+  const img = new Image();
+  // Only set crossOrigin for remote http(s) images.
   // Setting it for data:/blob: can break rendering in some browsers.
- 
-
+  if (/^https?:\/\//i.test(url)) {
+    img.crossOrigin = "anonymous";
+  }
+  img.onload = () => void 0;
+  img.onerror = () => onError?.();
+  img.src = url;
   return img;
 }
-const loadAssetImage = (assetId: string) =>
-  new Promise<HTMLImageElement>((resolve, reject) => {
-    const imageEl = new window.Image();
-    imageEl.crossOrigin = "anonymous";
-    imageEl.onload = () => resolve(imageEl);
-    imageEl.onerror = () => reject(new Error("No se pudo cargar imagen"));
-    imageEl.src = apiUrl(`/api/assets/file/${assetId}`);
-  });
 
 function stripHtml(s: string) {
   return s.replace(/<[^>]*>/g, "");
@@ -264,7 +254,7 @@ export default function Editor() {
           urls.add(apiUrl(`/api/assets/file/${it.assetRef}`));
         }
         if (it.type === "LockedLogoStamp" && club?.locked_logo_asset_id) {
-          urls.add(apiUrl(`/api/assets/file/${(club as any).locked_logo_asset_id || (club as any).locked_logo_asset_id}`));
+          urls.add(apiUrl(`/api/assets/file/${club.locked_logo_asset_id}`));
         }
       }
     }
@@ -403,12 +393,10 @@ export default function Editor() {
 
 
   const newId = (prefix?: string) => {
-  // @ts-ignore
-  const base = (crypto?.randomUUID?.() as string | undefined) ||
-    `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  return prefix ? `${prefix}_${base}` : base;
-};
-
+    // @ts-ignore
+    const base = (crypto?.randomUUID?.() as string | undefined) || `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    return prefix ? `${prefix}_${base}` : base;
+  };
 
   const ensureContentLayer = (page: any) => {
     page.layers = page.layers || [];
@@ -563,75 +551,68 @@ export default function Editor() {
 
   const exportPdf = async (quality: "web" | "print") => {
     try {
-      const safeName = (s: string) => (s || "")
-        .trim()
-        .replace(/[^a-zA-Z0-9\- _]/g, "_")
-        .replace(/\s+/g, "_")
-        .slice(0, 80) || "Club";
+      const safeName = (s: string) =>
+        (s || "")
+          .trim()
+          .replace(/[^a-zA-Z0-9\- _]/g, "_")
+          .replace(/\s+/g, "_")
+          .slice(0, 80);
+
       const clubName = safeName(club?.name || "Club");
       const downloadName = `Revista_${clubName}.pdf`;
 
+      // ✅ Prefer sync export (works even without Redis/worker)
+      try {
+        const res = await api.post(
+          `/api/export/sync/${projectId}`,
+          { quality },
+          { responseType: "blob", timeout: 0 }
+        );
+
+        const blob = new Blob([res.data], { type: "application/pdf" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = downloadName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setToast("Exportación completada.");
+        return;
+      } catch {
+        // fallback to async job export if sync isn't available
+      }
+
       // 1) Create export job
-      const { data } = await api.post(`/api/export/${projectId}`, { quality }, { timeout: 0 });
+      const { data } = await api.post(`/api/export/${projectId}`, { quality });
       const jobId: string = data.job_id;
 
       // 2) Poll job status
       const started = Date.now();
       let exportAssetId: string | null = null;
       while (Date.now() - started < 180_000) {
-        // backend exposes /api/export/job/{job_id}; older builds used /status.
-        const st = await api.get(`/api/export/job/${jobId}`, { timeout: 0 });
-        const s = st.data?.status;
-        if (s === "failed") {
-          throw new Error(st.data?.error || "Export failed");
-        }
-        if (s === "finished") {
-          exportAssetId = st.data?.export_asset_id || st.data?.result?.export_asset_id;
+        const st = await api.get(`/api/export/job/${jobId}`);
+        if (st.data.status === "finished") {
+          exportAssetId = st.data.asset_id;
           break;
         }
-        await new Promise((r) => setTimeout(r, 800));
+        if (st.data.status === "failed") {
+          throw new Error(st.data.error || "Export failed");
+        }
+        await new Promise((r) => setTimeout(r, 1200));
       }
-      if (!exportAssetId) throw new Error("Export timeout");
+      if (!exportAssetId) throw new Error("Timeout exportando.");
 
-      // 3) Download as blob (so it works with auth/proxy)
-      const res = await api.get(`/api/export/download/${exportAssetId}?filename=${encodeURIComponent(downloadName)}`, { responseType: "blob", timeout: 0 });
-      const blob = new Blob([res.data], { type: "application/pdf" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = downloadName;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      showToast("PDF listo ✅");
+      // 3) Download file (absolute to backend)
+      const downloadUrl = apiUrl(
+        `/api/export/download/${exportAssetId}?filename=${encodeURIComponent(downloadName)}`
+      );
+      window.location.href = downloadUrl;
+      setToast("Exportación completada.");
     } catch (e: any) {
       console.error(e);
-      // Fallback: if the background worker/queue fails, try synchronous export.
-      try {
-        const res2 = await api.post(`/api/export/sync/${projectId}`, { quality }, { responseType: "blob" as any, timeout: 0 });
-        const blob2 = new Blob([res2.data], { type: "application/pdf" });
-        const url2 = URL.createObjectURL(blob2);
-        const a2 = document.createElement("a");
-        a2.href = url2;
-        const safeName2 = (s: string) => (s || "")
-          .trim()
-          .replace(/[^a-zA-Z0-9\- _]/g, "_")
-          .replace(/\s+/g, "_")
-          .slice(0, 80) || "Club";
-        const clubName2 = safeName2(club?.name || "Club");
-        a2.download = `Revista_${clubName2}.pdf`;
-        document.body.appendChild(a2);
-        a2.click();
-        a2.remove();
-        URL.revokeObjectURL(url2);
-        showToast("PDF listo ✅");
-        return;
-      } catch (e2: any) {
-        console.error(e2);
-      }
-      const msg = (e?.message || e?.response?.data?.detail || "Error exportando").toString();
-      showToast(`Error exportando: ${msg}`);
+      setToast(`Error exportando: ${e?.message || "Network Error"}`);
     }
   };
 
@@ -694,28 +675,23 @@ export default function Editor() {
     setSelectedId(id);
   };
 
- 
-    const uploadAsset = async (file: File) => {
-  if (!club) throw new Error("No hay club activo");
+  const uploadAsset = async (file: File) => {
+    if (!club) throw new Error("No hay club activo");
 
-  const ok =
-    file.type.startsWith("image/") ||
-    /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name || "");
-  if (!ok) throw new Error("Formato no soportado. Usa PNG/JPG/WEBP/GIF/BMP.");
+    const ok = file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name || "");
+    if (!ok) throw new Error("Formato no soportado. Usa PNG/JPG/WEBP/GIF/BMP.");
 
-  const fd = new FormData();
-  fd.append("file", file);
+    const fd = new FormData();
+    fd.append("file", file);
 
-  // ✅ NO poner headers Content-Type (axios pone boundary)
-  const { data } = await api.post(`/api/assets/${club.id}`, fd, {
-    timeout: 0,
-    maxBodyLength: Infinity as any,
-    maxContentLength: Infinity as any,
-  });
+    const { data } = await api.post(`/api/assets/${club.id}`, fd, {
+      timeout: 0,
+      maxBodyLength: Infinity as any,
+      maxContentLength: Infinity as any,
+    });
 
-  return data.id as string;
-};
-
+    return data.id as string;
+  };
 
   const onPickImage = async (file: File) => {
     try {
@@ -1034,12 +1010,12 @@ export default function Editor() {
           : refStr && refStr.startsWith("data:")
             ? refStr
             : refStr
-              ? `/api/assets/file/${refStr}`
+              ? apiUrl(`/api/assets/file/${refStr}`)
               : null;
 
       // Locked logo stamp uses club locked_logo_asset_id
       const finalUrl = it.role === "locked_logo" && club?.locked_logo_asset_id
-        ? `/api/assets/file/${(club as any).locked_logo_asset_id || (club as any).locked_logo_asset_id}`
+        ? apiUrl(`/api/assets/file/${club.locked_logo_asset_id}`)
         : url;
 
       const img = finalUrl ? imgMap[finalUrl] : null;
@@ -1143,7 +1119,7 @@ export default function Editor() {
 
     if (it.type === "LockedLogoStamp") {
       // rendered as ImageFrame path
-      const finalUrl = club?.locked_logo_asset_id ? `/api/assets/file/${(club as any).locked_logo_asset_id || (club as any).locked_logo_asset_id}` : null;
+      const finalUrl = club?.locked_logo_asset_id ? apiUrl(`/api/assets/file/${club.locked_logo_asset_id}`) : null;
       const img = finalUrl ? imgMap[finalUrl] : null;
       return (
         <Group key={id} id={id} x={r.x} y={r.y}>
