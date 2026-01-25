@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
-import { apiUrl } from "../config";
 import { useAuth } from "../store/auth";
 import { Stage, Layer, Rect, Text, Image as KImage, Transformer, Group } from "react-konva";
 
@@ -236,8 +235,10 @@ export default function Editor() {
         setSelectedId(null);
       } catch (e: any) {
         console.error(e);
-        setToast("No se pudo cargar el proyecto (API). Revisa backend/proxy.");
-      }
+        const status = e?.response?.status;
+        const detail = e?.response?.data?.detail || e?.message || "";
+        setToast(`No se pudo cargar el proyecto (API)${status ? " ["+status+"]" : ""}. ${detail}`.trim());
+        }
     })();
   }, [projectId]);
 
@@ -251,10 +252,10 @@ export default function Editor() {
     for (const layer of p.layers || []) {
       for (const it of layer.items || []) {
         if (it.type === "ImageFrame" && it.assetRef && !String(it.assetRef).startsWith("{{")) {
-          urls.add(apiUrl(`/api/assets/file/${it.assetRef}`));
+          urls.add(`/api/assets/file/${it.assetRef}`);
         }
-        if (it.type === "LockedLogoStamp" && club?.locked_logo_asset_id) {
-          urls.add(apiUrl(`/api/assets/file/${club.locked_logo_asset_id}`));
+        if (it.type === "LockedLogoStamp" && club?.lockedLogoAssetId) {
+          urls.add(`/api/assets/file/${club.lockedLogoAssetId}`);
         }
       }
     }
@@ -269,7 +270,7 @@ export default function Editor() {
         inflight.current.delete(url);
       };
     });
-  }, [doc, pageIndex, club?.locked_logo_asset_id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [doc, pageIndex, club?.lockedLogoAssetId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Transformer binding
   useEffect(() => {
@@ -392,10 +393,13 @@ export default function Editor() {
   }, [projectId, doc, pageIndex]);
 
 
-  const newId = (prefix?: string) => {
-    // @ts-ignore
-    const base = (crypto?.randomUUID?.() as string | undefined) || `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    return prefix ? `${prefix}_${base}` : base;
+  const newId = () => {
+    try {
+      // @ts-ignore
+      return crypto?.randomUUID?.() || `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    } catch {
+      return `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    }
   };
 
   const ensureContentLayer = (page: any) => {
@@ -507,118 +511,57 @@ export default function Editor() {
   const ensureDetectedForPage = async (pageIndex: number) => {
     if (!projectId || !doc?.pages?.[pageIndex]) return;
     const p = doc.pages[pageIndex];
-
-    // Find existing detected/overlay layer (imported PDFs already have one called "overlay")
-    const getOverlayLayer = (pageObj: any) => {
-      const layers = pageObj.layers || [];
-      return (
-        layers.find((l: any) => l?.id === "overlay") ||
-        layers.find((l: any) => String(l?.name || "").toLowerCase().includes("detect")) ||
-        layers.find((l: any) => String(l?.id || "").toLowerCase().includes("detect"))
-      );
-    };
+    const hasDetectedLayer = (p.layers || []).some((l: any) => String(l.id || "").startsWith("detected_"));
+    if (hasDetectedLayer) return;
 
     try {
-      // ✅ Backend route: /api/projects/item/{projectId}/detect/{page_index}
-      const res = await api.post(`/api/projects/item/${projectId}/detect/${pageIndex}`);
-      const detected = (res.data?.detected ?? res.data) || {};
-      const meta = detected.meta || {};
-
-      if (meta.ocr_needed) {
-        showToast("Este PDF parece escaneado (sin texto real). Para detectar texto exacto hace falta OCR.");
-      }
-
-      const toRect = (r: any) => {
-        // Backend v3: {x,y,w,h} already in A4 coords
-        if (r && typeof r.x === "number") return r;
-        // Backend v1 fallback: [x0,y0,x1,y1] in page coords (rare). If so, just map directly (better than breaking).
-        if (Array.isArray(r) && r.length === 4) {
-          const [x0, y0, x1, y1] = r.map((n) => Number(n) || 0);
-          return { x: x0, y: y0, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) };
-        }
-        return { x: 0, y: 0, w: 10, h: 10 };
-      };
-
-      const textItems = (detected.text || []).map((t: any) => ({
-        id: `detected_text_${t.id || uuid()}`,
-        type: "TextFrame",
-        rect: toRect(t.rect),
-        text: Array.isArray(t.runs) ? t.runs : (t.text ?? ""),
-        styleRef: "Body",
-        padding: 6,
-        bg: t.bg_hex ? rgbaFromHex(t.bg_hex, 0.92) : (t.bg ? String(t.bg) : "rgba(255,255,255,0)"),
-        color: t.color_hex || "#111827",
-        role: "detected_text",
-      }));
-
-      const imgItems = (detected.images || []).map((im: any) => ({
-        id: `detected_img_${im.id || uuid()}`,
-        type: "ImageFrame",
-        rect: toRect(im.rect),
-        assetRef: im.asset_id || im.assetRef || null,
-        fitMode: "cover",
-        crop: { x: 0, y: 0, w: 1, h: 1 },
-        role: "detected_image",
-      }));
-
+      const res = await api.post(`/api/projects/item/${projectId}/detect?page_index=${pageIndex}`);
+      const detected = res.data || {};
       setDoc((prev: any) => {
         if (!prev) return prev;
-        const next = safeClone(prev);
+        const next = JSON.parse(JSON.stringify(prev));
         const page = next.pages[pageIndex];
         page.layers = page.layers || [];
 
-        let overlay = getOverlayLayer(page);
-        if (!overlay) {
-          overlay = { id: "overlay", name: "Detectado", visible: false, locked: false, items: [] };
-          page.layers.push(overlay);
-        }
-        overlay.items = [...textItems, ...imgItems];
-        // Keep detected layer hidden until user turns on toggles
-        overlay.visible = true;
+        const textItems = (detected.text || []).map((t: any) => ({
+          id: `detected_text_${t.id}`,
+          type: "TextFrame",
+          rect: { x: t.x, y: t.y, w: t.w, h: t.h },
+          text: t.text || "",
+          font: "Inter",
+          size: 14,
+          color: t.color_hex || "#111827",
+          bg: rgbaFromHex(t.bg_hex || "#ffffff", 0.92),
+          bg_hex: t.bg_hex || "#ffffff",
+        }));
+
+        const imgItems = (detected.images || []).map((im: any) => ({
+          id: `detected_img_${im.id}`,
+          type: "ImageFrame",
+          rect: { x: im.x, y: im.y, w: im.w, h: im.h },
+          // placeholder until user replaces
+          assetId: im.asset_id || null,
+        }));
+
+        page.layers = page.layers.filter((l: any) => !String(l.id || "").startsWith("detected_"));
+        if (textItems.length) page.layers.push({ id: "detected_text", role: "overlay", items: textItems });
+        if (imgItems.length) page.layers.push({ id: "detected_images", role: "overlay", items: imgItems });
         return next;
       });
-
-      showToast("Detección actualizada ✅");
-    } catch (e: any) {
+    } catch (e) {
       console.error(e);
-      showToast("No se pudo detectar. Revisa backend y que el proyecto tenga PDF fuente.");
     }
   };
 
   const exportPdf = async (quality: "web" | "print") => {
     try {
-      const safeName = (s: string) =>
-        (s || "")
-          .trim()
-          .replace(/[^a-zA-Z0-9\- _]/g, "_")
-          .replace(/\s+/g, "_")
-          .slice(0, 80);
-
+      const safeName = (s: string) => (s || "")
+        .trim()
+        .replace(/[^a-zA-Z0-9\- _]/g, "_")
+        .replace(/\s+/g, "_")
+        .slice(0, 80) || "Club";
       const clubName = safeName(club?.name || "Club");
       const downloadName = `Revista_${clubName}.pdf`;
-
-      // ✅ Prefer sync export (works even without Redis/worker)
-      try {
-        const res = await api.post(
-          `/api/export/sync/${projectId}`,
-          { quality },
-          { responseType: "blob", timeout: 0 }
-        );
-
-        const blob = new Blob([res.data], { type: "application/pdf" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = downloadName;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-        setToast("Exportación completada.");
-        return;
-      } catch {
-        // fallback to async job export if sync isn't available
-      }
 
       // 1) Create export job
       const { data } = await api.post(`/api/export/${projectId}`, { quality });
@@ -627,28 +570,60 @@ export default function Editor() {
       // 2) Poll job status
       const started = Date.now();
       let exportAssetId: string | null = null;
-      while (Date.now() - started < 180_000) {
+      while (Date.now() - started < 120_000) {
+        // backend exposes /api/export/job/{job_id}; older builds used /status.
         const st = await api.get(`/api/export/job/${jobId}`);
-        if (st.data.status === "finished") {
-          exportAssetId = st.data.asset_id;
+        const s = st.data?.status;
+        if (s === "failed") {
+          throw new Error(st.data?.error || "Export failed");
+        }
+        if (s === "finished") {
+          exportAssetId = st.data?.export_asset_id || st.data?.result?.export_asset_id;
           break;
         }
-        if (st.data.status === "failed") {
-          throw new Error(st.data.error || "Export failed");
-        }
-        await new Promise((r) => setTimeout(r, 1200));
+        await new Promise((r) => setTimeout(r, 800));
       }
-      if (!exportAssetId) throw new Error("Timeout exportando.");
+      if (!exportAssetId) throw new Error("Export timeout");
 
-      // 3) Download file (absolute to backend)
-      const downloadUrl = apiUrl(
-        `/api/export/download/${exportAssetId}?filename=${encodeURIComponent(downloadName)}`
-      );
-      window.location.href = downloadUrl;
-      setToast("Exportación completada.");
+      // 3) Download as blob (so it works with auth/proxy)
+      const res = await api.get(`/api/export/download/${exportAssetId}?filename=${encodeURIComponent(downloadName)}`, { responseType: "blob" });
+      const blob = new Blob([res.data], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = downloadName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      showToast("PDF listo ✅");
     } catch (e: any) {
       console.error(e);
-      setToast(`Error exportando: ${e?.message || "Network Error"}`);
+      // Fallback: if the background worker/queue fails, try synchronous export.
+      try {
+        const res2 = await api.post(`/api/export/sync/${projectId}`, { quality }, { responseType: "blob" as any });
+        const blob2 = new Blob([res2.data], { type: "application/pdf" });
+        const url2 = URL.createObjectURL(blob2);
+        const a2 = document.createElement("a");
+        a2.href = url2;
+        const safeName2 = (s: string) => (s || "")
+          .trim()
+          .replace(/[^a-zA-Z0-9\- _]/g, "_")
+          .replace(/\s+/g, "_")
+          .slice(0, 80) || "Club";
+        const clubName2 = safeName2(club?.name || "Club");
+        a2.download = `Revista_${clubName2}.pdf`;
+        document.body.appendChild(a2);
+        a2.click();
+        a2.remove();
+        URL.revokeObjectURL(url2);
+        showToast("PDF listo ✅");
+        return;
+      } catch (e2: any) {
+        console.error(e2);
+      }
+      const msg = (e?.message || e?.response?.data?.detail || "Error exportando").toString();
+      showToast(`Error exportando: ${msg}`);
     }
   };
 
@@ -713,19 +688,9 @@ export default function Editor() {
 
   const uploadAsset = async (file: File) => {
     if (!club) throw new Error("No hay club activo");
-
-    const ok = file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name || "");
-    if (!ok) throw new Error("Formato no soportado. Usa PNG/JPG/WEBP/GIF/BMP.");
-
     const fd = new FormData();
     fd.append("file", file);
-
-    const { data } = await api.post(`/api/assets/${club.id}`, fd, {
-      timeout: 0,
-      maxBodyLength: Infinity as any,
-      maxContentLength: Infinity as any,
-    });
-
+    const { data } = await api.post(`/api/assets/${club.id}`, fd, { headers: { "Content-Type": "multipart/form-data" } });
     return data.id as string;
   };
 
@@ -753,51 +718,17 @@ export default function Editor() {
 
   const onPickBackground = async (file: File) => {
     if (!page) return;
-
+    // find background item
+    const bg = (page.layers || [])
+      .flatMap((l: any) => l.items || [])
+      .find((it: any) => it.type === "ImageFrame" && (it.role === "page_background" || it.role === "pdf_background"));
+    if (!bg) {
+      showToast("Esta página no tiene fondo detectado");
+      return;
+    }
     try {
       const id = await uploadAsset(file);
-
-      // Prefer a dedicated background layer if it exists; otherwise create one.
-      setDoc((prev: any) => {
-        if (!prev) return prev;
-        const next = safeClone(prev);
-        const p = next.pages?.[safePageIndex];
-        if (!p) return prev;
-
-        p.layers = p.layers || [];
-        let bgLayer =
-          p.layers.find((l: any) => String(l?.id || "").toLowerCase() === "bg") ||
-          p.layers.find((l: any) => String(l?.name || "").toLowerCase().includes("fondo")) ||
-          p.layers.find((l: any) => (l?.items || []).some((it: any) => it?.role === "page_background" || it?.role === "pdf_background"));
-
-        if (!bgLayer) {
-          bgLayer = { id: "bg", name: "Fondo", visible: true, locked: true, items: [] };
-          // insert at bottom
-          p.layers.unshift(bgLayer);
-        }
-
-        // Find existing background image item
-        let bgItem = (bgLayer.items || []).find((it: any) => it.type === "ImageFrame" && (it.role === "page_background" || it.role === "pdf_background"));
-        if (!bgItem) {
-          bgItem = {
-            id: uuid(),
-            type: "ImageFrame",
-            rect: { x: 0, y: 0, w: A4_W, h: A4_H },
-            assetRef: id,
-            fitMode: "cover",
-            crop: { x: 0, y: 0, w: 1, h: 1 },
-            locked: true,
-            role: "page_background",
-          };
-          bgLayer.items = bgLayer.items || [];
-          bgLayer.items.unshift(bgItem);
-        } else {
-          bgItem.assetRef = id;
-        }
-
-        return next;
-      });
-
+      updateItem(bg.id, { assetRef: id });
       showToast("Fondo actualizado ✅");
     } catch (e) {
       console.error(e);
@@ -1080,12 +1011,12 @@ export default function Editor() {
           : refStr && refStr.startsWith("data:")
             ? refStr
             : refStr
-              ? apiUrl(`/api/assets/file/${refStr}`)
+              ? `/api/assets/file/${refStr}`
               : null;
 
-      // Locked logo stamp uses club locked_logo_asset_id
-      const finalUrl = it.role === "locked_logo" && club?.locked_logo_asset_id
-        ? apiUrl(`/api/assets/file/${club.locked_logo_asset_id}`)
+      // Locked logo stamp uses club lockedLogoAssetId
+      const finalUrl = it.role === "locked_logo" && club?.lockedLogoAssetId
+        ? `/api/assets/file/${club.lockedLogoAssetId}`
         : url;
 
       const img = finalUrl ? imgMap[finalUrl] : null;
@@ -1189,7 +1120,7 @@ export default function Editor() {
 
     if (it.type === "LockedLogoStamp") {
       // rendered as ImageFrame path
-      const finalUrl = club?.locked_logo_asset_id ? apiUrl(`/api/assets/file/${club.locked_logo_asset_id}`) : null;
+      const finalUrl = club?.lockedLogoAssetId ? `/api/assets/file/${club.lockedLogoAssetId}` : null;
       const img = finalUrl ? imgMap[finalUrl] : null;
       return (
         <Group key={id} id={id} x={r.x} y={r.y}>
@@ -1706,13 +1637,6 @@ export default function Editor() {
                   ref={rtDivRef}
                   contentEditable
                   suppressContentEditableWarning
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      // Force a real line break in PRO editor.
-                      e.preventDefault();
-                      try { document.execCommand("insertHTML", false, "<br/>"); } catch { /* ignore */ }
-                    }
-                  }}
                   style={{
                     marginTop: 12,
                     minHeight: 220,
