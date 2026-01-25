@@ -254,8 +254,8 @@ export default function Editor() {
         if (it.type === "ImageFrame" && it.assetRef && !String(it.assetRef).startsWith("{{")) {
           urls.add(`/api/assets/file/${it.assetRef}`);
         }
-        if (it.type === "LockedLogoStamp" && club?.lockedLogoAssetId) {
-          urls.add(`/api/assets/file/${club.lockedLogoAssetId}`);
+        if (it.type === "LockedLogoStamp" && club?.locked_logo_asset_id) {
+          urls.add(`/api/assets/file/${club.locked_logo_asset_id}`);
         }
       }
     }
@@ -270,7 +270,7 @@ export default function Editor() {
         inflight.current.delete(url);
       };
     });
-  }, [doc, pageIndex, club?.lockedLogoAssetId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [doc, pageIndex, club?.locked_logo_asset_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Transformer binding
   useEffect(() => {
@@ -393,12 +393,14 @@ export default function Editor() {
   }, [projectId, doc, pageIndex]);
 
 
-  const newId = () => {
+  const newId = (prefix?: string) => {
     try {
       // @ts-ignore
-      return crypto?.randomUUID?.() || `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      const base = crypto?.randomUUID?.() || `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      return prefix ? `${prefix}_${base}` : base;
     } catch {
-      return `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      const base = `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      return prefix ? `${prefix}_${base}` : base;
     }
   };
 
@@ -1014,9 +1016,9 @@ export default function Editor() {
               ? `/api/assets/file/${refStr}`
               : null;
 
-      // Locked logo stamp uses club lockedLogoAssetId
-      const finalUrl = it.role === "locked_logo" && club?.lockedLogoAssetId
-        ? `/api/assets/file/${club.lockedLogoAssetId}`
+      // Locked logo stamp uses club locked_logo_asset_id
+      const finalUrl = it.role === "locked_logo" && club?.locked_logo_asset_id
+        ? `/api/assets/file/${club.locked_logo_asset_id}`
         : url;
 
       const img = finalUrl ? imgMap[finalUrl] : null;
@@ -1120,7 +1122,7 @@ export default function Editor() {
 
     if (it.type === "LockedLogoStamp") {
       // rendered as ImageFrame path
-      const finalUrl = club?.lockedLogoAssetId ? `/api/assets/file/${club.lockedLogoAssetId}` : null;
+      const finalUrl = club?.locked_logo_asset_id ? `/api/assets/file/${club.locked_logo_asset_id}` : null;
       const img = finalUrl ? imgMap[finalUrl] : null;
       return (
         <Group key={id} id={id} x={r.x} y={r.y}>
