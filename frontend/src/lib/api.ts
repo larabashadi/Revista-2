@@ -1,48 +1,32 @@
-import axios from "axios";
-import type { InternalAxiosRequestConfig } from "axios";
-import { API_BASE } from "../config";
+import axios, { AxiosInstance } from "axios";
 
-// NOTE
-// - In dev, Vite proxies `/api` to the backend (see vite.config.ts).
-// - In production builds on Render, set VITE_API_BASE (e.g. https://<backend>.onrender.com)
-//   so requests go to the API domain.
-const baseURL = API_BASE || "";
+// Vite only exposes env vars prefixed with VITE_.
+// IMPORTANT: env values are embedded at build-time.
+const raw = (import.meta as any).env?.VITE_API_BASE || "";
 
-// Store token under sms_token (and legacy token key for back-compat).
-export function setToken(token: string | null) {
-  if (typeof window === "undefined") return;
-  if (token) {
-    localStorage.setItem("sms_token", token);
-    localStorage.setItem("token", token);
-  } else {
-    localStorage.removeItem("sms_token");
-    localStorage.removeItem("token");
-  }
-}
+// Normalize: remove trailing slashes to avoid "//api".
+export const apiUrl: string = String(raw).replace(/\/+$/, "");
 
-export function getToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem("sms_token") || localStorage.getItem("token");
-}
+// If apiUrl is empty, we fall back to same-origin.
+// This is useful when serving frontend through the backend.
+const baseURL = apiUrl || "";
 
-export const api = axios.create({
+export const api: AxiosInstance = axios.create({
   baseURL,
-  // Long operations (PDF import/export) can take time on Render. We override per-request too.
-  timeout: 30000,
-  withCredentials: false,
+  timeout: 120000, // 2 minutes for PDF/import/export operations
 });
 
-// Attach Authorization header if we have a token
-api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  const token = getToken();
+// Attach token if present.
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem("token");
   if (token) {
-    if ((config.headers as any)?.set) {
-      (config.headers as any).set("Authorization", `Bearer ${token}`);
-    } else {
-      (config.headers as any) = { ...(config.headers as any), Authorization: `Bearer ${token}` };
-    }
+    config.headers = config.headers || {};
+    (config.headers as any)["Authorization"] = `Bearer ${token}`;
   }
   return config;
 });
 
-export default api;
+export function setToken(token: string | null) {
+  if (token) localStorage.setItem("token", token);
+  else localStorage.removeItem("token");
+}
