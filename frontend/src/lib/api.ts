@@ -1,89 +1,61 @@
-// frontend/src/lib/api.ts
 import axios, { AxiosError, InternalAxiosRequestConfig } from "axios";
 
-/**
- * IMPORTANTE (Vite):
- * - VITE_API_BASE se inyecta en build-time.
- * - En Render Static Site, si cambias el env var, debes redeploy.
- */
-const RAW_ORIGIN = String(import.meta.env.VITE_API_BASE ?? "").trim();
-const API_ORIGIN = RAW_ORIGIN.replace(/\/+$/, ""); // quita slash final
+const rawBase = (import.meta.env.VITE_API_BASE || "").toString().trim();
 
-// Base real del API (FastAPI expone /api/...)
-export const API_BASE = API_ORIGIN ? `${API_ORIGIN}/api` : "/api";
+// Base del backend (SIN /api). Ej: https://revista-2-1.onrender.com
+export const API_BASE = rawBase.replace(/\/+$/, "") || window.location.origin;
 
-// Para construir URLs absolutas a assets si hace falta
-export const apiUrl = (path: string) => {
-  const p = path.startsWith("/") ? path : `/${path}`;
-  return API_ORIGIN ? `${API_ORIGIN}${p}` : p;
-};
+// Mantengo este nombre porque en tu proyecto lo usan en varias partes
+export const apiUrl = API_BASE;
 
-const TOKEN_KEY = "token";
+let _token: string | null = null;
 
-export const getToken = () => {
-  try {
-    return localStorage.getItem(TOKEN_KEY);
-  } catch {
-    return null;
-  }
-};
+export function setToken(token: string | null) {
+  _token = token;
+  if (token) localStorage.setItem("token", token);
+  else localStorage.removeItem("token");
+}
 
-export const setToken = (token: string | null) => {
-  try {
-    if (!token) localStorage.removeItem(TOKEN_KEY);
-    else localStorage.setItem(TOKEN_KEY, token);
-  } catch {
-    // ignore
-  }
-};
+// Normaliza rutas para que TODAS acaben en /api/...
+function normalizeUrl(url: string): string {
+  if (!url) return "/api";
+  if (/^https?:\/\//i.test(url)) return url;
+
+  let u = url.startsWith("/") ? url : `/${url}`;
+
+  // Atajos (por si algún sitio llama /me o /login sin prefijos)
+  if (u === "/me") return "/api/auth/me";
+  if (u === "/login") return "/api/auth/login";
+  if (u === "/register") return "/api/auth/register";
+
+  // Si ya viene /api/... lo dejamos
+  if (u.startsWith("/api/")) return u;
+
+  // Si no, lo prefijamos
+  return `/api${u}`;
+}
 
 export const api = axios.create({
   baseURL: API_BASE,
-  timeout: 120000,
-  withCredentials: false,
+  timeout: 180000, // PDFs grandes / export puede tardar
 });
 
-/**
- * Normaliza endpoints:
- * - Si alguien llama "/api/xxx" o "api/xxx", lo convertimos a "/xxx"
- *   porque baseURL ya incluye ".../api".
- */
-function normalizeUrl(url?: string) {
-  if (!url) return url;
-  let u = url.trim();
-  u = u.replace(/^\/?api\//, "/"); // "/api/x" -> "/x" | "api/x" -> "/x"
-  if (!u.startsWith("/")) u = `/${u}`;
-  return u;
-}
-
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  config.url = normalizeUrl(config.url);
-
-  const token = getToken();
-  if (token) {
-    // Axios v1 usa AxiosHeaders; esto evita el TS2322
-    const anyHeaders: any = config.headers ?? {};
-    if (typeof anyHeaders.set === "function") {
-      anyHeaders.set("Authorization", `Bearer ${token}`);
-    } else {
-      anyHeaders["Authorization"] = `Bearer ${token}`;
-    }
-    config.headers = anyHeaders;
+  if (typeof config.url === "string") {
+    config.url = normalizeUrl(config.url);
   }
 
+  const token = _token ?? localStorage.getItem("token");
+  if (token) {
+    config.headers = (config.headers ?? {}) as any;
+    (config.headers as any)["Authorization"] = `Bearer ${token}`;
+  }
   return config;
 });
 
 api.interceptors.response.use(
-  (r) => r,
-  (err: AxiosError) => {
-    // OJO: NO hacemos window.location.href (eso rompe el router y te da Not Found).
-    // Sólo limpiamos token para que la app reaccione.
-    if (err.response?.status === 401) {
-      setToken(null);
-    }
-    return Promise.reject(err);
-  }
+  (res) => res,
+  (err: AxiosError) => Promise.reject(err)
 );
 
 export default api;
