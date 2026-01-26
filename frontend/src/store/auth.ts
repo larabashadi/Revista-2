@@ -1,194 +1,146 @@
 import { create } from "zustand";
-import api, { setToken, getToken } from "../lib/api";
-
-export type Club = {
-  id: string;
-  name: string;
-  sport: string;
-  language: string;
-  primary_color: string;
-  secondary_color: string;
-  font_primary: string;
-  font_secondary: string;
-  locked_logo_asset_id?: string | null;
-  plan?: "free" | "pro";
-};
+import api, { setToken, clearToken, getToken } from "../lib/api";
 
 export type User = {
-  id: string;
+  id: number;
   email: string;
-  role?: "user" | "super_admin" | string;
+  role?: string; // el backend sí devuelve role en /api/auth/me
+};
+
+export type Club = {
+  id: number;
+  name: string;
+  plan?: string | null;
+  logo_asset_id?: string | null;
+  locked_logo_asset_id?: string | null;
 };
 
 type AuthState = {
   token: string | null;
   user: User | null;
   clubs: Club[];
-  activeClubId: string | null;
+  activeClubId: number | null;
 
-  setActiveClub: (id: string) => void;
+  loading: boolean;
+  error: string | null;
 
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string) => Promise<void>;
-
   loadMe: () => Promise<void>;
   loadClubs: () => Promise<void>;
-
+  createClub: (name: string) => Promise<Club>;
+  setActiveClub: (clubId: number | null) => void;
   logout: () => void;
 };
 
-function extractToken(data: any): string | null {
-  if (!data) return null;
-  // FastAPI OAuth2PasswordBearer típico
-  if (typeof data.access_token === "string") return data.access_token;
-  // otros formatos
-  if (typeof data.token === "string") return data.token;
-  if (typeof data.jwt === "string") return data.jwt;
-  return null;
-}
-
-function looksLikeHtml(resp: any): boolean {
-  const ct = String(resp?.headers?.["content-type"] || "").toLowerCase();
-  if (ct.includes("text/html")) return true;
-  // si axios te devolvió string enorme y empieza por "<!doctype"
-  if (typeof resp?.data === "string" && resp.data.trim().startsWith("<!doctype")) return true;
-  return false;
-}
-
-async function tryLoginEndpoint(path: string, email: string, password: string) {
-  const form = new URLSearchParams();
-  form.set("username", email);
-  form.set("password", password);
-
-  return api.post(path, form, {
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    validateStatus: () => true, // manejamos nosotros
-  });
-}
-
-async function tryRegisterEndpoint(path: string, email: string, password: string) {
-  return api.post(
-    path,
-    { email, password },
-    { validateStatus: () => true }
-  );
-}
-
 export const useAuth = create<AuthState>((set, get) => ({
-  token: localStorage.getItem("token"),
+  token: getToken(),
   user: null,
   clubs: [],
-  activeClubId: localStorage.getItem("activeClubId"),
+  activeClubId: null,
 
-  setActiveClub: (id) => {
-    localStorage.setItem("activeClubId", id);
-    set({ activeClubId: id });
-  },
+  loading: false,
+  error: null,
 
-  login: async (email, password) => {
-    const e = email.trim();
-    if (!e || !password) throw new Error("Email y contraseña obligatorios.");
+  async login(email, password) {
+    set({ loading: true, error: null });
 
-    // 1) Intento principal
-    let resp = await tryLoginEndpoint("/auth/login", e, password);
+    // FastAPI OAuth2PasswordRequestForm => form-urlencoded con username/password
+    const body = new URLSearchParams();
+    body.set("username", email);
+    body.set("password", password);
 
-    // Si 404, intento alternativo (por si tu backend expone /login)
-    if (resp.status === 404) {
-      resp = await tryLoginEndpoint("/login", e, password);
+    const res = await api.post("/auth/login", body, {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      // importante: si por error estás pegando al frontend, te puede devolver HTML con 200
+      transformResponse: (r) => r,
+      responseType: "text",
+    });
+
+    // Intentamos parsear JSON sí o sí
+    let data: any = null;
+    try {
+      data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+    } catch {
+      data = null;
     }
 
-    if (looksLikeHtml(resp)) {
+    if (!data?.access_token) {
+      const url = (res.request as any)?.responseURL || "(sin URL)";
+      const ct = res.headers?.["content-type"] || "(sin content-type)";
       throw new Error(
-        "El login está respondiendo HTML (parece que estás llamando al FRONT, no al BACKEND). Revisa VITE_API_BASE."
+        `Login respondió ${res.status} pero NO devolvió access_token.\n` +
+          `Request URL: ${url}\n` +
+          `Content-Type: ${ct}\n` +
+          `Body (primeros 200 chars): ${String(res.data).slice(0, 200)}`
       );
     }
 
-    if (resp.status < 200 || resp.status >= 300) {
-      const detail = (resp.data && (resp.data.detail || resp.data.message)) || `HTTP ${resp.status}`;
-      throw new Error(`Login falló: ${detail}`);
-    }
-
-    const token = extractToken(resp.data);
-    if (!token) {
-      throw new Error(
-        "Login respondió 200 pero NO devolvió access_token. Estás llamando a un endpoint incorrecto o el backend no devuelve token."
-      );
-    }
-
-    setToken(token);
-    set({ token });
+    setToken(data.access_token);
+    set({ token: data.access_token });
 
     await get().loadMe();
     await get().loadClubs();
+
+    set({ loading: false });
   },
 
-  register: async (email, password) => {
-    const e = email.trim();
-    if (!e || !password) throw new Error("Email y contraseña obligatorios.");
+  async register(email, password) {
+    set({ loading: true, error: null });
 
-    let resp = await tryRegisterEndpoint("/auth/register", e, password);
-    if (resp.status === 404) {
-      resp = await tryRegisterEndpoint("/register", e, password);
+    // tu backend /api/auth/register devuelve TokenOut también
+    const res = await api.post("/auth/register", { email, password });
+    if (!res.data?.access_token) {
+      throw new Error("Register no devolvió access_token.");
     }
 
-    if (looksLikeHtml(resp)) {
-      throw new Error(
-        "El register está respondiendo HTML (parece que estás llamando al FRONT, no al BACKEND). Revisa VITE_API_BASE."
-      );
-    }
+    setToken(res.data.access_token);
+    set({ token: res.data.access_token });
 
-    if (resp.status < 200 || resp.status >= 300) {
-      const detail = (resp.data && (resp.data.detail || resp.data.message)) || `HTTP ${resp.status}`;
-      throw new Error(`Registro falló: ${detail}`);
-    }
+    await get().loadMe();
+    await get().loadClubs();
 
-    const token = extractToken(resp.data);
-    if (token) {
-      setToken(token);
-      set({ token });
-      await get().loadMe();
-      await get().loadClubs();
-      return;
-    }
-
-    // Si el backend registra pero no devuelve token, al menos intenta login
-    await get().login(e, password);
+    set({ loading: false });
   },
 
-  loadMe: async () => {
-    const token = get().token || getToken();
-    if (!token) {
-      set({ user: null });
-      return;
-    }
-    try {
-      setToken(token);
-      const { data } = await api.get("/auth/me");
-      set({ user: data || null });
-    } catch {
-      set({ user: null });
-    }
+  async loadMe() {
+    const t = getToken();
+    if (!t) return;
+
+    const res = await api.get("/auth/me"); // => /api/auth/me
+    set({ user: res.data });
   },
 
-  loadClubs: async () => {
-    const token = get().token || getToken();
-    if (!token) return;
+  async loadClubs() {
+    const t = getToken();
+    if (!t) return;
 
-    setToken(token);
-    const { data } = await api.get("/clubs");
-    const clubs = Array.isArray(data) ? data : [];
-    set({ clubs });
+    const res = await api.get("/clubs"); // => /api/clubs
+    const clubs: Club[] = Array.isArray(res.data) ? res.data : [];
+    const current = get().activeClubId;
 
-    const active = get().activeClubId;
-    if (!active && clubs[0]?.id) {
-      get().setActiveClub(clubs[0].id);
-    }
+    set({
+      clubs,
+      activeClubId: current ?? (clubs[0]?.id ?? null),
+    });
   },
 
-  logout: () => {
-    localStorage.removeItem("token");
-    localStorage.removeItem("activeClubId");
-    setToken("");
+  async createClub(name: string) {
+    const res = await api.post("/clubs", { name }); // => /api/clubs
+    const club: Club = res.data;
+    await get().loadClubs();
+    set({ activeClubId: club.id });
+    return club;
+  },
+
+  setActiveClub(clubId) {
+    set({ activeClubId: clubId });
+  },
+
+  logout() {
+    clearToken();
     set({ token: null, user: null, clubs: [], activeClubId: null });
   },
 }));
+
+export default useAuth;
