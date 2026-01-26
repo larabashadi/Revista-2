@@ -7,7 +7,255 @@ type Template = {
   id: string;
   title: string;
   sport: string;
-  style: string;
+  style: string;// frontend/src/pages/Dashboard.tsx
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import api, { apiUrl } from "../lib/api";
+import { useAuth } from "../store/auth";
+
+type TemplateRow = {
+  id: string;
+  name: string;
+  origin: string;
+  sport: string;
+  pages: number;
+};
+
+export default function Dashboard() {
+  const nav = useNavigate();
+  const { token, clubs, loadClubs, activeClubId, setActiveClubId } = useAuth();
+
+  const [templates, setTemplates] = useState<TemplateRow[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
+
+  const [q, setQ] = useState("");
+  const [selected, setSelected] = useState<TemplateRow | null>(null);
+
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfMsg, setPdfMsg] = useState("");
+
+  const clubId = activeClubId || clubs?.[0]?.id || "";
+
+  useEffect(() => {
+    if (!token) nav("/login");
+  }, [token]);
+
+  useEffect(() => {
+    loadClubs();
+  }, []);
+
+  const filtered = useMemo(() => {
+    const qq = q.trim().toLowerCase();
+    if (!qq) return templates;
+    return templates.filter((t) =>
+      `${t.name} ${t.origin} ${t.sport}`.toLowerCase().includes(qq)
+    );
+  }, [templates, q]);
+
+  const loadTemplates = async () => {
+    try {
+      setTemplatesLoading(true);
+      setTemplatesError(null);
+      const res = await api.get("/api/templates");
+      setTemplates(res.data || []);
+    } catch (e: any) {
+      setTemplatesError("No se pudieron cargar las plantillas (API)");
+      setTemplates([]);
+    } finally {
+      setTemplatesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadTemplates();
+  }, []);
+
+  const handleUseTemplate = async (tpl: TemplateRow) => {
+    if (!clubId) {
+      alert("Primero selecciona o crea un club.");
+      return;
+    }
+    try {
+      const res = await api.post("/api/projects", {
+        club_id: clubId,
+        name: tpl.name,
+        template_id: tpl.id,
+      });
+      nav(`/editor/${res.data.id}`);
+    } catch (e) {
+      alert("No se pudo crear el proyecto con la plantilla.");
+    }
+  };
+
+  const handleImportPdf = async (mode: "safe" | "pro") => {
+    if (!clubId) {
+      alert("Primero selecciona o crea un club.");
+      return;
+    }
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/pdf";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+
+      const form = new FormData();
+      form.append("file", file);
+      form.append("mode", mode);
+
+      try {
+        setPdfLoading(true);
+        setPdfMsg("Cargando PDF... Esto puede tardar 20–90s según páginas.");
+
+        const res = await api.post(`/api/import/${clubId}`, form, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+
+        nav(`/editor/${res.data.project_id}`);
+      } catch (e: any) {
+        alert(`Error importando PDF: ${e?.response?.status || ""}`);
+      } finally {
+        setPdfLoading(false);
+        setPdfMsg("");
+      }
+    };
+    input.click();
+  };
+
+  return (
+    <div>
+      {pdfLoading && (
+        <div style={{ padding: 12, background: "rgba(0,0,0,.35)" }}>
+          <b>{pdfMsg}</b>
+        </div>
+      )}
+
+      <div className="layout">
+        {/* LEFT */}
+        <div className="sidebar left">
+          <div className="card" style={{ marginBottom: 12 }}>
+            <div style={{ fontWeight: 900, marginBottom: 8 }}>Tu club</div>
+
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                Seleccionar club
+              </div>
+
+              <select
+                value={clubId}
+                onChange={(e) => setActiveClubId(e.target.value)}
+                style={{ width: "100%" }}
+              >
+                {clubs.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.plan})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="card">
+            <div style={{ fontWeight: 900, marginBottom: 8 }}>Crear revista</div>
+
+            <button
+              className="btn primary"
+              disabled={pdfLoading}
+              onClick={() => handleImportPdf("safe")}
+            >
+              {pdfLoading ? "Cargando PDF..." : "Importar PDF (modo seguro)"}
+            </button>
+
+            <button
+              className="btn"
+              disabled={pdfLoading}
+              onClick={() => handleImportPdf("pro")}
+              style={{ marginTop: 8 }}
+            >
+              {pdfLoading ? "Cargando PDF..." : "Importar PDF (editable)"}
+            </button>
+          </div>
+        </div>
+
+        {/* CENTER */}
+        <div className="main">
+          <div className="card">
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <div>
+                <div style={{ fontWeight: 900 }}>Plantillas</div>
+                <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                  Catálogo + Generadas
+                </div>
+              </div>
+
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Buscar plantilla..."
+                style={{ width: 220 }}
+              />
+            </div>
+
+            {templatesLoading && <div>Cargando plantillas...</div>}
+            {templatesError && <div style={{ color: "#ff6" }}>{templatesError}</div>}
+
+            <div className="templates" style={{ marginTop: 12 }}>
+              {filtered.map((t) => (
+                <div className="card" key={t.id}>
+                  <div className="templatePreview">
+                    <img
+                      loading="lazy"
+                      decoding="async"
+                      src={apiUrl(`/api/templates/${t.id}/thumbnail?size=420&page=0`)}
+                      alt={t.name}
+                    />
+                  </div>
+                  <div style={{ fontWeight: 800 }}>{t.name}</div>
+                  <div style={{ fontSize: 12, color: "var(--muted)" }}>
+                    {t.sport} · {t.pages} páginas · {t.origin}
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                    <button className="btn" onClick={() => setSelected(t)}>
+                      Previsualizar
+                    </button>
+                    <button className="btn primary" onClick={() => handleUseTemplate(t)}>
+                      Usar plantilla
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* RIGHT */}
+        <div className="sidebar right">
+          <div className="card">
+            <div style={{ fontWeight: 900 }}>Previsualización</div>
+            {!selected ? (
+              <div style={{ marginTop: 8, color: "var(--muted)" }}>
+                Selecciona una plantilla y dale “Previsualizar”.
+              </div>
+            ) : (
+              <div style={{ marginTop: 12 }}>
+                <div className="templatePreview" style={{ height: 240 }}>
+                  <img
+                    src={apiUrl(`/api/templates/${selected.id}/thumbnail?size=720&page=0`)}
+                    alt={selected.name}
+                  />
+                </div>
+                <div style={{ fontWeight: 900 }}>{selected.name}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
   pages: number;
   format: string;
   source: string;
