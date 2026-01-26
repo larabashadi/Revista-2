@@ -1,65 +1,59 @@
+// frontend/src/lib/api.ts
 import axios, { type InternalAxiosRequestConfig } from "axios";
 
-const RAW = ((import.meta as any).env?.VITE_API_BASE as string | undefined) ?? "";
-export const API_BASE = RAW.trim().replace(/\/+$/, ""); // sin slash final
+const RAW_BASE = String(import.meta.env.VITE_API_BASE || "").replace(/\/+$/, "");
+// Siempre trabajamos contra .../api
+const API_ROOT = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE}/api`;
 
-function isAbsolute(url: string) {
-  return /^https?:\/\//i.test(url);
+// Acepta urls con /api/... y las normaliza para no duplicar /api
+function normalizeUrlPath(url?: string) {
+  if (!url) return url;
+  // Si alguien llama a /api/templates, lo convertimos a /templates (porque baseURL ya es .../api)
+  if (url === "/api") return "/";
+  if (url.startsWith("/api/")) return url.slice(4);
+  return url;
 }
 
-export function apiUrl(path: string) {
-  if (!path) return API_BASE;
-  if (isAbsolute(path)) return path;
-  const p = path.startsWith("/") ? path : `/${path}`;
-  return `${API_BASE}${p}`;
+const TOKEN_KEY = "sms_token";
+
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
 }
 
-let _token: string | null = null;
-
-export function getToken() {
-  return _token ?? localStorage.getItem("token");
-}
-
-export function setToken(t: string | null) {
-  _token = t;
-  if (t) localStorage.setItem("token", t);
-  else localStorage.removeItem("token");
+export function setToken(token: string) {
+  localStorage.setItem(TOKEN_KEY, token);
 }
 
 export function clearToken() {
-  setToken(null);
+  localStorage.removeItem(TOKEN_KEY);
 }
 
-const api = axios.create({
-  baseURL: API_BASE || undefined,
+// axios instance
+export const api = axios.create({
+  baseURL: API_ROOT,
   timeout: 120000,
 });
 
-// 1) Fuerza prefijo /api en TODAS las rutas relativas.
-// 2) Inyecta Authorization: Bearer <token>
+// auth header + normalización /api
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  const url = (config.url ?? "").trim();
+  config.url = normalizeUrlPath(config.url);
 
-  if (url && !isAbsolute(url)) {
-    const u = url.startsWith("/") ? url : `/${url}`;
-    // si ya viene /api/... no lo duplicamos
-    config.url = u === "/api" || u.startsWith("/api/") ? u : `/api${u}`;
+  const token = getToken();
+  if (token) {
+    // Cast a any para evitar peleas de typings con AxiosHeaders
+    (config.headers as any) = {
+      ...(config.headers as any),
+      Authorization: `Bearer ${token}`,
+    };
   }
-
-  const t = getToken();
-  if (t) {
-    config.headers = (config.headers ?? {}) as any;
-
-    // compat con AxiosHeaders / objeto plano
-    if (typeof (config.headers as any).set === "function") {
-      (config.headers as any).set("Authorization", `Bearer ${t}`);
-    } else {
-      (config.headers as any)["Authorization"] = `Bearer ${t}`;
-    }
-  }
-
   return config;
 });
 
-export default api;
-export { api };
+// Construye URLs ABSOLUTAS (importante para <img src=...> y Render)
+export function apiUrl(path: string) {
+  const p = normalizeUrlPath(path.startsWith("/") ? path : `/${path}`) || "/";
+  return `${API_ROOT}${p}`;
+}
+
+// Para debug rápido si quieres mostrarlo en UI
+export const API_BASE = API_ROOT;
