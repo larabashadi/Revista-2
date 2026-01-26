@@ -1,66 +1,46 @@
-import axios, {
-  AxiosError,
-  AxiosHeaders,
-  InternalAxiosRequestConfig,
-} from "axios";
+// frontend/src/lib/api.ts
+import axios, { AxiosInstance } from "axios";
 
-/**
- * API base (backend). Debe ser algo como:
- *   https://revista-2-1.onrender.com
- */
-export const API_BASE = String(import.meta.env.VITE_API_BASE || "")
-  .trim()
-  .replace(/\/+$/, "");
+const rawBase = (import.meta.env.VITE_API_BASE || "").trim();
 
-// Helper: build absolute URL to backend
-export function apiUrl(path: string): string {
-  const p = String(path || "").trim();
-  if (!p) return API_BASE;
-  if (/^https?:\/\//i.test(p)) return p; // already absolute
-  const withSlash = p.startsWith("/") ? p : `/${p}`;
-  return `${API_BASE}${withSlash}`;
-}
+// normaliza: quita slash final
+export const API_BASE = rawBase.endsWith("/")
+  ? rawBase.slice(0, -1)
+  : rawBase;
 
-// Axios instance (talks to backend)
-export const api = axios.create({
-  baseURL: API_BASE,
-  timeout: 10 * 60 * 1000, // 10 min (PDF import can take time)
+export const apiUrl = (path: string) => {
+  if (!API_BASE) return path; // fallback (dev local)
+  if (!path.startsWith("/")) path = "/" + path;
+  return API_BASE + path;
+};
+
+const tokenKey = "token";
+
+export const getToken = () => localStorage.getItem(tokenKey) || "";
+export const setToken = (t: string) => {
+  if (!t) return;
+  localStorage.setItem(tokenKey, t);
+  api.defaults.headers.common.Authorization = `Bearer ${t}`;
+};
+export const clearToken = () => {
+  localStorage.removeItem(tokenKey);
+  delete api.defaults.headers.common.Authorization;
+};
+
+export const api: AxiosInstance = axios.create({
+  baseURL: API_BASE || "",
+  withCredentials: false,
+  timeout: 120000,
 });
 
-// Keep Authorization header synced
-export function setToken(token: string | null) {
+api.interceptors.request.use((config) => {
+  const token = getToken();
   if (token) {
-    api.defaults.headers.common["Authorization"] = `Bearer ${token}`;
-  } else {
-    delete api.defaults.headers.common["Authorization"];
-  }
-}
-
-// Attach token automatically (axios v1 types)
-api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  const token =
-    typeof window !== "undefined" ? localStorage.getItem("token") : null;
-
-  if (token) {
-    // Ensure headers is AxiosHeaders (not {})
-    if (!config.headers) config.headers = new AxiosHeaders();
-    if (config.headers instanceof AxiosHeaders) {
-      config.headers.set("Authorization", `Bearer ${token}`);
-    } else {
-      // fallback (shouldn't happen often)
-      (config.headers as any)["Authorization"] = `Bearer ${token}`;
-    }
+    const headers = (config.headers ?? {}) as any;
+    headers.Authorization = `Bearer ${token}`;
+    config.headers = headers;
   }
   return config;
 });
 
-api.interceptors.response.use(
-  (r) => r,
-  (err: AxiosError) => {
-    // Optional: you can add centralized logging here
-    return Promise.reject(err);
-  }
-);
-
-// Default export for old imports: `import api from "../lib/api"`
 export default api;
