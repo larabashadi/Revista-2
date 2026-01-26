@@ -1,21 +1,24 @@
 import { create } from "zustand";
-import api, { setToken, clearToken } from "../lib/api";
+import api, { setToken } from "../lib/api";
 
 export type User = {
   id: string;
   email: string;
-  is_active?: boolean;
-  is_superuser?: boolean;
-  role?: string; // por si lo usas en el front
+  name?: string | null;
+  role?: string | null; // backend has role
 };
 
 export type Club = {
   id: string;
   name: string;
-  logo_asset_id?: string | null;
+  sport?: string | null;
+  language?: string | null;
+  primary_color?: string | null;
+  secondary_color?: string | null;
+  font_primary?: string | null;
+  font_secondary?: string | null;
   locked_logo_asset_id?: string | null;
-  // si luego añades plan, puedes extender aquí sin romper
-  plan?: string | null;
+  plan?: string | null; // backend returns plan in ClubOut
 };
 
 type AuthState = {
@@ -24,76 +27,115 @@ type AuthState = {
   clubs: Club[];
   activeClubId: string | null;
 
+  setActiveClub: (clubId: string | null) => void;
+
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<void>;
+  register: (email: string, password: string, name?: string) => Promise<void>;
   logout: () => void;
 
   loadMe: () => Promise<void>;
   loadClubs: () => Promise<void>;
-  setActiveClub: (clubId: string | null) => void;
 };
 
-export const useAuth = create<AuthState>((set, get) => ({
-  token: localStorage.getItem("access_token") || localStorage.getItem("token"),
-  user: null,
-  clubs: [],
-  activeClubId: localStorage.getItem("active_club_id"),
+export const useAuth = create<AuthState>((set, get) => {
+  const initialToken =
+    typeof window !== "undefined" ? localStorage.getItem("token") : null;
 
-  setActiveClub: (clubId) => {
-    if (clubId) localStorage.setItem("active_club_id", clubId);
-    else localStorage.removeItem("active_club_id");
-    set({ activeClubId: clubId });
-  },
+  if (initialToken) setToken(initialToken);
 
-  login: async (email, password) => {
-    // FastAPI OAuth2PasswordRequestForm => x-www-form-urlencoded
-    const form = new URLSearchParams();
-    form.set("username", email);
-    form.set("password", password);
+  return {
+    token: initialToken,
+    user: null,
+    clubs: [],
+    activeClubId:
+      typeof window !== "undefined" ? localStorage.getItem("activeClubId") : null,
 
-    const res = await api.post("/api/auth/login", form, {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    });
+    setActiveClub: (clubId) => {
+      const v = clubId ? String(clubId) : null;
+      set({ activeClubId: v });
+      if (typeof window !== "undefined") {
+        if (v) localStorage.setItem("activeClubId", v);
+        else localStorage.removeItem("activeClubId");
+      }
+    },
 
-    const token = res.data?.access_token;
-    if (!token) {
-      throw new Error("Login respondió pero NO devolvió access_token.");
-    }
+    async login(email, password) {
+      // FastAPI OAuth2PasswordRequestForm expects x-www-form-urlencoded:
+      const form = new URLSearchParams();
+      form.set("username", email);
+      form.set("password", password);
 
-    setToken(token);
-    set({ token });
+      const res = await api.post("/api/auth/login", form, {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      });
 
-    await get().loadMe();
-    await get().loadClubs();
-  },
+      const token = (res.data as any)?.access_token;
+      if (!token) {
+        throw new Error(
+          "Login respondió 200 pero NO devolvió access_token. Revisa backend/auth."
+        );
+      }
 
-  register: async (email, password) => {
-    // El backend suele aceptar JSON en /api/auth/register
-    await api.post("/api/auth/register", { email, password });
-    // tras registrar, login automático
-    await get().login(email, password);
-  },
+      if (typeof window !== "undefined") {
+        localStorage.setItem("token", token);
+      }
+      setToken(token);
+      set({ token });
 
-  logout: () => {
-    clearToken();
-    localStorage.removeItem("active_club_id");
-    set({ token: null, user: null, clubs: [], activeClubId: null });
-  },
+      await get().loadMe();
+      await get().loadClubs();
+    },
 
-  loadMe: async () => {
-    const res = await api.get("/api/auth/me");
-    set({ user: res.data });
-  },
+    async register(email, password, name) {
+      const res = await api.post("/api/auth/register", {
+        email,
+        password,
+        name: name || null,
+      });
 
-  loadClubs: async () => {
-    const res = await api.get("/api/clubs");
-    const clubs: Club[] = res.data || [];
-    set({ clubs });
+      // Backend might auto-login or not. If it returns token, store it.
+      const token = (res.data as any)?.access_token ?? null;
+      if (token) {
+        if (typeof window !== "undefined") localStorage.setItem("token", token);
+        setToken(token);
+        set({ token });
+        await get().loadMe();
+        await get().loadClubs();
+      }
+    },
 
-    // auto-selección si no hay activeClubId
-    const cur = get().activeClubId;
-    if (!cur && clubs.length > 0) {
-      get().setActiveClub(clubs[0].id);
-    }
-  },
-}));
+    logout() {
+      setToken(null);
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("token");
+      }
+      set({ token: null, user: null, clubs: [], activeClubId: null });
+    },
+
+    async loadMe() {
+      const token = get().token;
+      if (!token) return;
+      const res = await api.get("/api/auth/me");
+      set({ user: res.data as User });
+    },
+
+    async loadClubs() {
+      const token = get().token;
+      if (!token) return;
+      const res = await api.get("/api/clubs");
+      const clubs = (res.data as Club[]) || [];
+      set({ clubs });
+
+      // Ensure activeClubId still exists
+      const active = get().activeClubId;
+      if (active && !clubs.some((c) => String(c.id) === String(active))) {
+        get().setActiveClub(clubs[0]?.id ? String(clubs[0].id) : null);
+      }
+      if (!active && clubs.length > 0) {
+        get().setActiveClub(String(clubs[0].id));
+      }
+    },
+  };
+});
+
+export type { AuthState };
