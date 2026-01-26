@@ -4,6 +4,7 @@ import api, { setToken } from "../lib/api";
 export type User = {
   id: string;
   email: string;
+  name?: string | null;
   role?: string | null;
 };
 
@@ -18,6 +19,8 @@ export type Club = {
   font_secondary?: string | null;
   locked_logo_asset_id?: string | null;
   plan?: string | null;
+  templates_locked?: boolean | null;
+  allowed_template_ids?: string | null; // comma-separated
 };
 
 export type AuthState = {
@@ -29,7 +32,7 @@ export type AuthState = {
   setActiveClub: (clubId: string | null) => void;
 
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string) => Promise<void>;
+  register: (email: string, password: string, name?: string) => Promise<void>;
   logout: () => void;
 
   loadMe: () => Promise<void>;
@@ -54,7 +57,6 @@ export const useAuth = create<AuthState>((set, get) => {
     setActiveClub: (clubId) => {
       const v = clubId ? String(clubId) : null;
       set({ activeClubId: v });
-
       if (typeof window !== "undefined") {
         if (v) localStorage.setItem("activeClubId", v);
         else localStorage.removeItem("activeClubId");
@@ -62,7 +64,6 @@ export const useAuth = create<AuthState>((set, get) => {
     },
 
     async login(email, password) {
-      // OAuth2PasswordRequestForm => x-www-form-urlencoded
       const form = new URLSearchParams();
       form.set("username", email);
       form.set("password", password);
@@ -74,14 +75,11 @@ export const useAuth = create<AuthState>((set, get) => {
       const token = (res.data as any)?.access_token;
       if (!token) {
         throw new Error(
-          "Login respondió 200 pero NO devolvió access_token. Estás llamando a un endpoint incorrecto o backend no devuelve token."
+          "Login respondió 200 pero NO devolvió access_token. Endpoint incorrecto o backend no devuelve token."
         );
       }
 
-      if (typeof window !== "undefined") {
-        localStorage.setItem("token", token);
-      }
-
+      if (typeof window !== "undefined") localStorage.setItem("token", token);
       setToken(token);
       set({ token });
 
@@ -89,11 +87,11 @@ export const useAuth = create<AuthState>((set, get) => {
       await get().loadClubs();
     },
 
-    async register(email, password) {
-      // Tu backend (zip) acepta SOLO email+password
+    async register(email, password, name) {
       const res = await api.post("/api/auth/register", {
         email,
         password,
+        name: name || null,
       });
 
       const token = (res.data as any)?.access_token;
@@ -101,44 +99,39 @@ export const useAuth = create<AuthState>((set, get) => {
         if (typeof window !== "undefined") localStorage.setItem("token", token);
         setToken(token);
         set({ token });
-
         await get().loadMe();
         await get().loadClubs();
       }
     },
 
     logout() {
-      // ⚠️ IMPORTANTE: setToken debe aceptar null en lib/api.ts
-      setToken(null as any);
-
+      setToken(null);
       if (typeof window !== "undefined") {
         localStorage.removeItem("token");
         localStorage.removeItem("activeClubId");
       }
-
       set({ token: null, user: null, clubs: [], activeClubId: null });
     },
 
     async loadMe() {
-      if (!get().token) return;
+      const token = get().token;
+      if (!token) return;
       const res = await api.get("/api/auth/me");
       set({ user: res.data as User });
     },
 
     async loadClubs() {
-      if (!get().token) return;
+      const token = get().token;
+      if (!token) return;
 
       const res = await api.get("/api/clubs");
       const clubs = (res.data as Club[]) || [];
       set({ clubs });
 
-      // asegurar activeClubId existe
       const active = get().activeClubId;
-
       if (active && !clubs.some((c) => String(c.id) === String(active))) {
         get().setActiveClub(clubs[0]?.id ? String(clubs[0].id) : null);
       }
-
       if (!active && clubs.length > 0) {
         get().setActiveClub(String(clubs[0].id));
       }
