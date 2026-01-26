@@ -3,372 +3,299 @@ import { useNavigate } from "react-router-dom";
 import { api, apiUrl } from "../lib/api";
 import { useAuth } from "../store/auth";
 
-type Template = { id: string; name: string; origin: string; sport: string; pages: number };
-
-function Toast({ msg }: { msg: string }) {
-  return <div className="toast">{msg}</div>;
-}
+type Template = {
+  id: string;
+  title: string;
+  sport: string;
+  style: string;
+  pages: number;
+  format: string;
+  source: string;
+  thumbnail_url?: string | null;
+};
 
 export default function Dashboard() {
   const nav = useNavigate();
   const { clubs, activeClubId, setActiveClub, loadClubs } = useAuth();
-  const [templates, setTemplates] = useState<Template[]>([]);
-  const [previewTemplate, setPreviewTemplate] = useState<Template | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
-  const [filter, setFilter] = useState("");
-  const [style, setStyle] = useState("minimal_premium");
-  const [sport, setSport] = useState("football");
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [genOptions, setGenOptions] = useState<any[] | null>(null);
 
-  const activeClub = useMemo(() => clubs.find(c => c.id === activeClubId) || null, [clubs, activeClubId]);
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
+
+  const [query, setQuery] = useState("");
+  const [preview, setPreview] = useState<Template | null>(null);
+
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
+
+  const activeClub = useMemo(
+    () => clubs.find((c) => String(c.id) === String(activeClubId)) || null,
+    [clubs, activeClubId]
+  );
+
+  async function fetchTemplates() {
+    setTemplatesLoading(true);
+    setTemplatesError(null);
+    try {
+      const res = await api.get("/api/templates");
+      setTemplates(res.data || []);
+    } catch (e: any) {
+      setTemplatesError("No se pudieron cargar las plantillas (API)");
+      setTemplates([]);
+    } finally {
+      setTemplatesLoading(false);
+    }
+  }
 
   useEffect(() => {
-    (async () => {
-      try {
-        const { data } = await api.get("/api/templates");
-        setTemplates(data);
-      } catch (e: any) {
-        setToast(e?.response?.data?.detail || "No se pudieron cargar las plantillas (API)");
-        setTimeout(()=>setToast(null), 2500);
-      }
-    })();
+    // refresh clubs and templates on entry
+    loadClubs().catch(() => {});
+    fetchTemplates().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function createClubQuick() {
-    const name = prompt("Nombre del club:", "Mi Club") || "Mi Club";
-    try {
-      const res = await api.post("/api/clubs", { name, sport: "football", language: "es" });
-      // Activate immediately so the user can pick a template without re-login
-      setActiveClub(res.data.id);
-      await loadClubs();
-      setToast("Club creado ✅");
-    } catch (e: any) {
-      setToast(e?.response?.data?.detail || "No se pudo crear el club");
-    } finally {
-      setTimeout(()=>setToast(null), 2500);
-    }
-  }
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return templates;
+    return templates.filter((t) => {
+      return (
+        t.title.toLowerCase().includes(q) ||
+        t.sport.toLowerCase().includes(q) ||
+        t.style.toLowerCase().includes(q)
+      );
+    });
+  }, [templates, query]);
 
-  async function uploadLockedLogo() {
+  async function importPdf(editable: boolean) {
     if (!activeClubId) {
-      setToast("Primero crea/selecciona un club");
-      setTimeout(()=>setToast(null), 2500);
+      alert("Selecciona un club primero.");
       return;
     }
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "image/*";
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      const fd = new FormData();
-      fd.append("file", file);
-      try {
-        await api.post(`/api/clubs/${activeClubId}/locked-logo`, fd);
-        await loadClubs();
-        setToast("Logo portada actualizado ✅");
-      } catch (e: any) {
-        setToast(e?.response?.data?.detail || "No se pudo subir el logo");
-      } finally {
-        setTimeout(()=>setToast(null), 2500);
-      }
-    };
-    input.click();
-  }
 
-  async function createProjectFromTemplate(templateId: string, name: string) {
-    if (!activeClubId) {
-      setToast("Primero crea/selecciona un club");
-      setTimeout(()=>setToast(null), 2500);
-      return;
-    }
-    try {
-      const { data } = await api.post(`/api/projects/${activeClubId}`, { template_id: templateId, name });
-      nav(`/editor/${data.id}`);
-    } catch (e: any) {
-      setToast(e?.response?.data?.detail || "No se pudo crear el proyecto");
-      setTimeout(()=>setToast(null), 2500);
-    }
-  }
-
-  async function importPdf(mode: string) {
-    if (!activeClubId) {
-      setToast("Primero crea/selecciona un club");
-      setTimeout(()=>setToast(null), 2500);
-      return;
-    }
     const input = document.createElement("input");
     input.type = "file";
     input.accept = "application/pdf";
     input.onchange = async () => {
       const file = input.files?.[0];
       if (!file) return;
-      const fd = new FormData();
-      fd.append("file", file);
+
+      setImporting(true);
+      setImportMsg(
+        "Cargando PDF... Esto puede tardar 20–90s (según páginas). Cuando termine, se abrirá el editor."
+      );
+
       try {
-        // Import background only; text/images are detected on-demand per page inside the editor
-        const { data } = await api.post(`/api/import/${activeClubId}?mode=${mode}&preset=background`, fd);
-        nav(`/editor/${data.project_id}`);
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("club_id", String(activeClubId));
+        fd.append("editable", editable ? "1" : "0");
+
+        // backend: /api/projects/import
+        const res = await api.post("/api/projects/import", fd, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+
+        const projectId = res.data?.project_id;
+        if (!projectId) throw new Error("Import no devolvió project_id");
+
+        nav(`/editor/${projectId}`);
       } catch (e: any) {
-        setToast(e?.response?.data?.detail || "No se pudo importar el PDF");
-        setTimeout(()=>setToast(null), 3500);
+        const code = e?.response?.status ? ` [${e.response.status}]` : "";
+        alert(`No se pudo cargar el proyecto (API)${code}. Revisa backend/proxy.`);
+      } finally {
+        setImporting(false);
+        setImportMsg(null);
       }
     };
     input.click();
   }
 
-  async function generateTemplates() {
-    setIsGenerating(true);
-    try{
-      const { data } = await api.post("/api/templates/generate", { sport, style });
-      setGenOptions(data.options);
-    } catch (e: any) {
-      setToast(e?.response?.data?.detail || "No se pudieron generar opciones");
-      setTimeout(()=>setToast(null), 3000);
-    } finally {
-      setIsGenerating(false);
+  async function useTemplate(t: Template) {
+    if (!activeClubId) {
+      alert("Selecciona un club primero.");
+      return;
     }
-  }
-
-  async function saveGenerated(opt: any) {
-    const name = prompt("Nombre para esta plantilla:", opt.name) || opt.name;
     try {
-      await api.post("/api/templates/save-generated", { name, sport, document: opt.document, layoutSignature: opt.layoutSignature });
-      setToast("Plantilla guardada ✅");
-      const { data: list } = await api.get("/api/templates");
-      setTemplates(list);
-      setGenOptions(null);
-    } catch (e: any) {
-      setToast(e?.response?.data?.detail || "No se pudo guardar la plantilla (¿estás logueado?)");
-    } finally {
-      setTimeout(()=>setToast(null), 3000);
+      const res = await api.post("/api/projects/from-template", {
+        club_id: String(activeClubId),
+        template_id: t.id,
+      });
+      const projectId = res.data?.project_id;
+      if (!projectId) throw new Error("No project_id");
+      nav(`/editor/${projectId}`);
+    } catch (e) {
+      alert("No se pudo crear el proyecto desde plantilla (API).");
     }
   }
-
-  const shown = templates.filter(t => (t.name + " " + t.origin + " " + t.sport).toLowerCase().includes(filter.toLowerCase()));
 
   return (
-    <div className="layout" style={{ position: "relative" }}>
-      <div className="sidebar">
-        <div className="card" style={{marginBottom:12}}>
-          <h3 style={{marginTop:0}}>Tu club</h3>
-          {!clubs.length ? (
-            <>
-              <p style={{color:"var(--muted)"}}>Crea tu club para empezar.</p>
-              <button className="btn primary" onClick={createClubQuick}>Crear club</button>
-            </>
-          ) : (
-            <>
-              <div className="field">
-                <label>Seleccionar club</label>
-                <select value={activeClubId || ""} onChange={(e) => setActiveClub(Number(e.target.value))}>
-                  {clubs.map(c => <option key={c.id} value={c.id}>{c.name} ({c.plan})</option>)}
-                </select>
-              </div>
-              <div style={{display:"flex", gap:10, flexWrap:"wrap"}}>
-                <button className="btn" onClick={uploadLockedLogo}>Logo portada (bloqueado)</button>
-                <button
-                  className="btn"
-                  onClick={() =>
-                    api
-                      .post(`/api/clubs/${activeClubId}/dev/activate-pro`)
-                      .then(loadClubs)
-                      .then(() => setToast("PRO activado (dev) ✅"))
-                      .catch((e) => setToast(e?.response?.data?.detail || "No se pudo activar PRO"))
-                      .finally(() => setTimeout(()=>setToast(null), 2500))
-                  }
-                >
-                  Activar PRO (dev)
-                </button>
-              </div>
-              <p style={{color:"var(--muted)", marginBottom:0}}>
-                El logo bloqueado siempre se renderiza en la portada y no se puede editar.
-              </p>
-            </>
-          )}
-        </div>
-
-        <div className="card" style={{marginBottom:12}}>
-          <h3 style={{marginTop:0}}>Crear revista</h3>
-          <p style={{color:"var(--muted)", marginTop:0}}>
-            Elige plantilla nativa (40 páginas) o importa un PDF.
-          </p>
-          <div style={{display:"flex", gap:10, flexWrap:"wrap"}}>
-            <button className="btn primary" onClick={()=>importPdf("safe")}>Importar PDF (modo seguro)</button>
-            <button className="btn" onClick={()=>importPdf("editable")}>Importar PDF (editable)</button>
-          </div>
-        </div>
-
-        <div className="card">
-          <h3 style={{marginTop:0}}>Generar plantilla (distinta)</h3>
-          <p style={{color:"var(--muted)", marginTop:0}}>
-            Genera 3 opciones nativas de 40 páginas. Elige una y guárdala.
-          </p>
-          <div className="field">
-            <label>Deporte</label>
-            <select value={sport} onChange={(e)=>setSport(e.target.value)}>
-              <option value="football">Fútbol</option>
-              <option value="basket">Basket</option>
-            </select>
-          </div>
-          <div className="field">
-            <label>Estilo (estructura)</label>
-            <select value={style} onChange={(e)=>setStyle(e.target.value)}>
-              <option value="minimal_premium">Minimal premium</option>
-              <option value="newspaper_editorial">Editorial periódico</option>
-              <option value="photographic">Fotográfico</option>
-              <option value="tech_data">Tech / Datos</option>
-              <option value="sponsors_first">Sponsors-first</option>
-              <option value="academy_youth">Cantera / Youth</option>
-            </select>
-          </div>
-          <button className="btn primary" disabled={isGenerating} onClick={generateTemplates}>
-            {isGenerating ? "Generando..." : "Generar 3 opciones"}
-          </button>
-        </div>
-      </div>
-
-      <div className="main">
-        <div style={{display:"flex", gap:10, alignItems:"center", marginBottom:14, flexWrap:"wrap"}}>
-          <h2 style={{margin:0}}>Plantillas</h2>
-          <span className="pill">Catálogo + Generadas</span>
-          <input
-            style={{height:40, borderRadius:14, border:"1px solid var(--border)", background:"rgba(255,255,255,.04)", color:"var(--text)", padding:"0 12px", outline:"none"}}
-            value={filter}
-            onChange={(e)=>setFilter(e.target.value)}
-            placeholder="Buscar plantilla…"
-          />
-        </div>
-
-        {genOptions && (
-          <div className="card" style={{marginBottom:14}}>
-            <h3 style={{marginTop:0}}>Opciones generadas</h3>
-            <div className="grid">
-              {genOptions.map((opt, idx) => (
-                <div key={idx} className="card">
-                  <div style={{fontWeight:950}}>{opt.name}</div>
-                  <div style={{color:"var(--muted)", fontSize:12, marginTop:6}}>
-                    Unicidad: {Math.round((opt.generator?.uniquenessScore || 0)*100)}% · similitud: {Math.round((opt.generator?.similarityToCatalogMax || 0)*100)}%
-                  </div>
-                  <div style={{display:"flex", gap:10, marginTop:10}}>
-                    <button className="btn primary" onClick={()=>saveGenerated(opt)}>Guardar plantilla</button>
-                    <button className="btn" onClick={()=>setGenOptions(null)}>Cerrar</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="templates">
-          {shown.map(t => (
-            <div key={t.id} className="card">
-              <div className="templatePreview" style={{cursor:"pointer"}} onClick={()=>setPreviewTemplate(t)}>
-                <img
-                  src={`${apiUrl}/api/templates/${t.id}/thumbnail?page=0&size=320`}
-                  alt={`Preview ${t.name}`}
-                  loading="lazy"
-                  decoding="async"
-                />
-              </div>
-              <div style={{display:"flex", justifyContent:"space-between", gap:10}}>
-                <div style={{fontWeight:950}}>{t.name}</div>
-                <span className="pill">{t.origin}</span>
-              </div>
-              <div style={{color:"var(--muted)", fontSize:12, marginTop:6}}>
-                {t.sport} · {t.pages} páginas · A4 spreads
-              </div>
-              <div style={{display:"flex", gap:10, marginTop:12, flexWrap:"wrap"}}>
-                <button className="btn" onClick={()=>setPreviewTemplate(t)}>Previsualizar</button>
-                <button className="btn primary" onClick={()=>createProjectFromTemplate(t.id, `Revista - ${t.name}`)}>Usar plantilla</button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      
-      {previewTemplate && (
-        <div
-          onClick={() => setPreviewTemplate(null)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,.55)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 18,
-            zIndex: 50,
-          }}
-        >
-          <div
-            className="card"
-            onClick={(e) => e.stopPropagation()}
-            style={{ width: "min(1100px, 98vw)", maxHeight: "92vh", overflow: "auto" }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-              <div>
-                <div style={{ fontWeight: 950, fontSize: 18 }}>{previewTemplate.name}</div>
-                <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 4 }}>
-                  {previewTemplate.sport} · {previewTemplate.pages} páginas · A4 spreads · {previewTemplate.origin}
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: 10 }}>
-                <button className="btn" onClick={() => setPreviewTemplate(null)}>Cerrar</button>
-                <button
-                  className="btn primary"
-                  onClick={() => createProjectFromTemplate(previewTemplate.id, `Revista - ${previewTemplate.name}`)}
-                >
-                  Usar esta plantilla
-                </button>
-              </div>
-            </div>
-
-            <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 12 }}>
-              {[0, 2, 4].map((p) => (
-                <div key={p} className="card">
-                  <div style={{ fontWeight: 900, marginBottom: 10, color: "var(--muted)" }}>Página {p + 1}</div>
-                  <div style={{ borderRadius: 14, overflow: "hidden", border: "1px solid var(--border)" }}>
-                    <img
-                      src={`${apiUrl}/api/templates/${previewTemplate.id}/thumbnail?page=${p}&size=520`}
-                      alt={`Preview page ${p + 1}`}
-                      style={{ width: "100%", display: "block" }}
-                      loading="lazy"
-                  decoding="async"
-                />
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <p style={{ color: "var(--muted)", marginTop: 14, marginBottom: 0 }}>
-              Consejo: si quieres ver otra parte, crea el proyecto y navega por páginas.
-            </p>
+    <div className="min-h-[calc(100vh-56px)]">
+      {importMsg && (
+        <div className="px-6 pt-4 text-sm text-white/90">
+          <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
+            {importMsg}
           </div>
         </div>
       )}
 
-      {toast && <Toast msg={toast} />}
+      <div className="p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Sidebar */}
+        <div className="lg:col-span-4 space-y-6">
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
+            <div className="text-lg font-semibold text-white">Tu club</div>
+            <div className="mt-3">
+              <div className="text-xs text-white/60 mb-1">Seleccionar club</div>
+              <select
+                className="w-full rounded-xl bg-black/20 border border-white/10 px-3 py-2 text-white"
+                value={activeClubId || ""}
+                onChange={(e) => setActiveClub(String(e.target.value))}
+              >
+                {clubs.map((c) => (
+                  <option key={c.id} value={String(c.id)}>
+                    {c.name} {c.plan ? `(${c.plan})` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-      {/* Build/version badge (kept inside the root to avoid JSX syntax errors) */}
-      <div
-        style={{
-          position: "fixed",
-          right: 12,
-          bottom: 12,
-          fontSize: 12,
-          color: "rgba(233,238,249,.70)",
-          background: "rgba(0,0,0,.30)",
-          border: "1px solid rgba(255,255,255,.10)",
-          padding: "6px 10px",
-          borderRadius: 999,
-          backdropFilter: "blur(10px)",
-          zIndex: 60,
-        }}
-      >
-        V10.4.7
+            <div className="mt-4 text-sm text-white/70">
+              {activeClub?.locked_logo_asset_id
+                ? "Logo portada (bloqueado) configurado."
+                : "Aún no hay logo bloqueado para portada."}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
+            <div className="text-lg font-semibold text-white">Crear revista</div>
+            <div className="text-sm text-white/70 mt-1">
+              Elige plantilla nativa o importa un PDF.
+            </div>
+
+            <div className="mt-4 flex gap-3 flex-wrap">
+              <button
+                className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white border border-white/10"
+                disabled={importing}
+                onClick={() => importPdf(false)}
+              >
+                {importing ? "Cargando PDF..." : "Importar PDF (modo seguro)"}
+              </button>
+
+              <button
+                className="px-4 py-2 rounded-xl bg-purple-600/80 hover:bg-purple-600 text-white border border-white/10"
+                disabled={importing}
+                onClick={() => importPdf(true)}
+              >
+                {importing ? "Cargando PDF..." : "Importar PDF (editable)"}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Main */}
+        <div className="lg:col-span-8 space-y-6">
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
+            <div className="flex items-end justify-between gap-4 flex-wrap">
+              <div>
+                <div className="text-2xl font-semibold text-white">Plantillas</div>
+                <div className="text-sm text-white/70">Catálogo + Generadas</div>
+              </div>
+              <input
+                className="w-full sm:w-[360px] rounded-xl bg-black/20 border border-white/10 px-3 py-2 text-white placeholder:text-white/30"
+                placeholder="Buscar plantilla..."
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
+
+            {templatesLoading && (
+              <div className="mt-4 text-white/70 text-sm">Cargando plantillas...</div>
+            )}
+            {templatesError && (
+              <div className="mt-4 text-red-300 text-sm">{templatesError}</div>
+            )}
+
+            {!templatesLoading && !templatesError && filtered.length === 0 && (
+              <div className="mt-4 text-white/60 text-sm">
+                No hay plantillas para mostrar. Revisa backend: <code>GET /api/templates</code>
+              </div>
+            )}
+
+            <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+              {filtered.map((t) => {
+                const thumb =
+                  t.thumbnail_url && /^https?:\/\//i.test(t.thumbnail_url)
+                    ? t.thumbnail_url
+                    : apiUrl(`/api/templates/${t.id}/thumbnail`);
+
+                return (
+                  <div
+                    key={t.id}
+                    className="rounded-2xl border border-white/10 bg-black/20 overflow-hidden"
+                  >
+                    <div className="aspect-[4/3] bg-black/30">
+                      <img
+                        src={thumb}
+                        alt={t.title}
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                        onError={(e) => {
+                          (e.currentTarget as HTMLImageElement).style.opacity = "0.2";
+                        }}
+                      />
+                    </div>
+                    <div className="p-4">
+                      <div className="text-white font-semibold">{t.title}</div>
+                      <div className="text-xs text-white/60 mt-1">
+                        {t.sport} · {t.pages} páginas · {t.format} · {t.source}
+                      </div>
+
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-white border border-white/10 text-sm"
+                          onClick={() => setPreview(t)}
+                        >
+                          Previsualizar
+                        </button>
+                        <button
+                          className="px-3 py-2 rounded-xl bg-purple-600/80 hover:bg-purple-600 text-white border border-white/10 text-sm"
+                          onClick={() => useTemplate(t)}
+                        >
+                          Usar plantilla
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
+            <div className="text-lg font-semibold text-white">Previsualización</div>
+            <div className="text-sm text-white/70 mt-1">
+              Selecciona una plantilla y dale a “Previsualizar”.
+            </div>
+
+            {!preview ? (
+              <div className="mt-4 text-white/60 text-sm">Sin selección.</div>
+            ) : (
+              <div className="mt-4">
+                <div className="text-white font-semibold">{preview.title}</div>
+                <div className="text-xs text-white/60 mt-1">
+                  {preview.sport} · {preview.pages} páginas · {preview.format}
+                </div>
+
+                <div className="mt-3 aspect-[4/3] rounded-2xl overflow-hidden border border-white/10 bg-black/30">
+                  <img
+                    src={apiUrl(`/api/templates/${preview.id}/thumbnail`)}
+                    alt={preview.title}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
