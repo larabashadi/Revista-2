@@ -162,7 +162,7 @@ export default function Dashboard() {
             <>
               <div className="field">
                 <label>Seleccionar club</label>
-                <select value={activeClubId || ""} onChange={(e)=>setActiveClub(e.target.value)}>
+                <select value={activeClubId || ""} onChange={(e) => setActiveClub(Number(e.target.value))}>
                   {clubs.map(c => <option key={c.id} value={c.id}>{c.name} ({c.plan})</option>)}
                 </select>
               </div>
