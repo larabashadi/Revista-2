@@ -1084,9 +1084,27 @@ export default function Editor() {
           y={it.rect.y}
           draggable={!locked}
           onClick={() => {
-            if (locked) return;
-            setSelectedId(id);
-          }}
+  if (locked) return;
+
+  const ref = findItem(id);
+  const isDetected = !!ref?.layer?.id?.startsWith("detected");
+
+  if (isDetected) {
+    // Convierte SOLO este bloque a editable
+    promoteDetectedItem(id);
+
+    // Abre editor de texto después de que el state se actualice
+    setTimeout(() => {
+      setSelectedId(id);
+      openRichText(id);
+    }, 0);
+
+    return;
+  }
+
+  setSelectedId(id);
+}}
+
           onTap={() => {
             if (locked) return;
             setSelectedId(id);
