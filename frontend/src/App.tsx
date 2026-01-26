@@ -1,89 +1,127 @@
-import React, { useEffect } from "react";
-import { Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
+import { useEffect, useMemo } from "react";
+import { Routes, Route, Navigate, Link, useLocation } from "react-router-dom";
 import { useAuth } from "./store/auth";
-
-import Login from "./pages/Login";
-import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 import Editor from "./pages/Editor";
+import Login from "./pages/Login";
 import AdminDashboard from "./pages/AdminDashboard";
+import { apiUrl } from "./lib/api";
 
 function Topbar() {
-  const { token, logout, user } = useAuth();
-  const nav = useNavigate();
+  const { token, user, clubs, activeClubId, logout } = useAuth();
+  const location = useLocation();
+
+  const activeClub = useMemo(() => {
+    if (!activeClubId) return null;
+    return clubs.find((c) => String(c.id) === String(activeClubId)) ?? null;
+  }, [clubs, activeClubId]);
+
+  const clubLogo = activeClub?.locked_logo_asset_id
+    ? `${apiUrl}/api/assets/file/${activeClub.locked_logo_asset_id}`
+    : null;
+
+  const isAuthed = !!token;
+  const isAdmin = (user?.role ?? "").toLowerCase() === "admin";
 
   return (
     <div className="topbar">
-      <div className="brand" onClick={() => nav("/")}>
-        <div
-          style={{
-            width: 34,
-            height: 34,
-            borderRadius: 12,
-            background: "rgba(91,140,255,.18)",
-            border: "1px solid rgba(91,140,255,.35)",
-          }}
-        />
-        <div>Sports Magazine SaaS</div>
-        <span className="pill">v10.4.7</span>
-      </div>
+      <div className="topbarInner">
+        <div className="brand">
+          <div className="brandLogo">
+            {clubLogo ? (
+              <img
+                src={clubLogo}
+                alt="Club logo"
+                className="brandLogoImg"
+                loading="lazy"
+                decoding="async"
+              />
+            ) : (
+              <div className="brandMark" />
+            )}
+          </div>
+          <div className="brandText">
+            <div className="brandTitle">Sports Magazine</div>
+            <div className="brandSub">
+              {activeClub?.name ? activeClub.name : "Editor"}
+            </div>
+          </div>
+        </div>
 
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        {token ? (
-          <>
-            <button className="btn" onClick={() => nav("/")}>Dashboard</button>
-            {user?.role === "super_admin" ? (
-              <button className="btn" onClick={() => nav("/admin")}>Admin</button>
-            ) : null}
-            <button className="btn danger" onClick={() => { logout(); nav("/login"); }}>
-              Salir
-            </button>
-          </>
-        ) : (
-          <>
-            <button className="btn" onClick={() => nav("/login")}>Entrar</button>
-          </>
-        )}
+        <div className="topbarRight">
+          {isAuthed ? (
+            <>
+              <Link className="btn" to="/dashboard">
+                Panel
+              </Link>
+
+              {/* si quieres ocultar Admin siempre, comenta este bloque */}
+              {isAdmin && (
+                <Link className="btn" to="/admin">
+                  Admin
+                </Link>
+              )}
+
+              <button
+                className="btn btnPrimary"
+                onClick={() => {
+                  logout();
+                }}
+              >
+                Salir
+              </button>
+            </>
+          ) : (
+            <>
+              {/* Evita mostrar botón Login si ya estás en /login */}
+              {location.pathname !== "/login" && (
+                <Link className="btn btnPrimary" to="/login">
+                  Entrar
+                </Link>
+              )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-function RequireAuth({ children }: { children: React.ReactNode }) {
-  const { token } = useAuth();
-  if (!token) return <Navigate to="/login" replace />;
-  return <>{children}</>;
-}
-
 export default function App() {
-  const { token, loadClubs, loadMe } = useAuth();
-  const loc = useLocation();
+  const { token, loadMe, loadClubs } = useAuth();
 
   useEffect(() => {
     if (!token) return;
+    // cargar user + clubs tras login
     loadMe().catch(() => void 0);
     loadClubs().catch(() => void 0);
-  }, [token]);
-
-  // Evita quedarse “en blanco” si hay rutas raras
-  // (y deja /editor/:id funcionando)
-  if (!token && loc.pathname.startsWith("/editor")) {
-    return <Navigate to="/login" replace />;
-  }
+  }, [token, loadMe, loadClubs]);
 
   return (
-    <>
+    <div className="appRoot">
       <Topbar />
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
+      <div className="appBody">
+        <Routes>
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/login" element={<Login />} />
 
-        <Route path="/" element={<RequireAuth><Dashboard /></RequireAuth>} />
-        <Route path="/editor/:projectId" element={<RequireAuth><Editor /></RequireAuth>} />
-        <Route path="/admin" element={<RequireAuth><AdminDashboard /></RequireAuth>} />
+          <Route
+            path="/dashboard"
+            element={token ? <Dashboard /> : <Navigate to="/login" replace />}
+          />
+          <Route
+            path="/editor/:projectId"
+            element={token ? <Editor /> : <Navigate to="/login" replace />}
+          />
 
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </>
+          <Route
+            path="/admin"
+            element={token ? <AdminDashboard /> : <Navigate to="/login" replace />}
+          />
+
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </Routes>
+      </div>
+    </div>
   );
 }
