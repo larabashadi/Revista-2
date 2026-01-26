@@ -1,59 +1,62 @@
-// frontend/src/lib/api.ts
-import axios, { type InternalAxiosRequestConfig } from "axios";
+import axios, { AxiosHeaders, type AxiosInstance, type InternalAxiosRequestConfig } from "axios";
 
-const RAW_BASE = String(import.meta.env.VITE_API_BASE || "").replace(/\/+$/, "");
-// Siempre trabajamos contra .../api
-const API_ROOT = RAW_BASE.endsWith("/api") ? RAW_BASE : `${RAW_BASE}/api`;
-
-// Acepta urls con /api/... y las normaliza para no duplicar /api
-function normalizeUrlPath(url?: string) {
-  if (!url) return url;
-  // Si alguien llama a /api/templates, lo convertimos a /templates (porque baseURL ya es .../api)
-  if (url === "/api") return "/";
-  if (url.startsWith("/api/")) return url.slice(4);
-  return url;
+/**
+ * IMPORTANTE:
+ * - En Render, VITE_API_BASE debe ser el HOST del backend, sin /api al final.
+ *   Ej: https://revista-2-1.onrender.com
+ */
+function normalizeBase(u?: string) {
+  return (u || "").trim().replace(/\/+$/, "");
 }
 
-const TOKEN_KEY = "sms_token";
+export const apiUrl = normalizeBase(import.meta.env.VITE_API_BASE);
 
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
+// Axios instance
+export const api: AxiosInstance = axios.create({
+  baseURL: apiUrl || undefined, // si está vacío, quedará relativo (y verás 404 en /templates, /clubs, etc)
+  timeout: 10 * 60 * 1000, // 10 min (import PDF puede tardar)
+});
+
+// Token runtime + helpers
+let _token: string | null = null;
+
+export function getToken() {
+  if (_token) return _token;
+  const t = localStorage.getItem("access_token") || localStorage.getItem("token");
+  _token = t;
+  return t;
 }
 
-export function setToken(token: string) {
-  localStorage.setItem(TOKEN_KEY, token);
+export function setToken(t: string | null) {
+  _token = t;
+  if (t) {
+    localStorage.setItem("access_token", t);
+    localStorage.setItem("token", t); // compat
+  } else {
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("token");
+  }
 }
 
 export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY);
+  setToken(null);
 }
 
-// axios instance
-export const api = axios.create({
-  baseURL: API_ROOT,
-  timeout: 120000,
-});
-
-// auth header + normalización /api
+// Request interceptor: Authorization
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  config.url = normalizeUrlPath(config.url);
+  const t = getToken();
+  if (t) {
+    // Aseguramos AxiosHeaders para evitar TS2322
+    config.headers =
+      config.headers instanceof AxiosHeaders
+        ? config.headers
+        : new AxiosHeaders(config.headers);
 
-  const token = getToken();
-  if (token) {
-    // Cast a any para evitar peleas de typings con AxiosHeaders
-    (config.headers as any) = {
-      ...(config.headers as any),
-      Authorization: `Bearer ${token}`,
-    };
+    config.headers.set("Authorization", `Bearer ${t}`);
   }
   return config;
 });
 
-// Construye URLs ABSOLUTAS (importante para <img src=...> y Render)
-export function apiUrl(path: string) {
-  const p = normalizeUrlPath(path.startsWith("/") ? path : `/${path}`) || "/";
-  return `${API_ROOT}${p}`;
-}
-
-// Para debug rápido si quieres mostrarlo en UI
-export const API_BASE = API_ROOT;
+// Export DEFAULT para que NO rompa imports antiguos:
+// import api from "../lib/api"
+export default api;
