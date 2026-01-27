@@ -1,27 +1,27 @@
-import axios from "axios";
-import type { InternalAxiosRequestConfig } from "axios";
+import axios, { AxiosHeaders, type InternalAxiosRequestConfig } from "axios";
 
-const RAW = (import.meta as any)?.env?.VITE_API_BASE ?? "";
-export const apiUrl = String(RAW || "").replace(/\/+$/, "");
+const rawBase = (import.meta as any).env?.VITE_API_BASE ?? "";
+export const apiUrl: string = String(rawBase || "").replace(/\/+$/, "");
 
-let _token: string | null = null;
+let token: string | null = null;
 
-export function setToken(token: string | null) {
-  _token = token;
-}
+export const setToken = (t: string | null) => {
+  token = t;
+};
 
-const api = axios.create({
+export const api = axios.create({
   baseURL: apiUrl || undefined,
-  timeout: 10 * 60 * 1000,
-  maxBodyLength: Infinity,
-  maxContentLength: Infinity,
-  withCredentials: false,
+  timeout: 120000,
 });
 
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  if (_token) {
-    config.headers = (config.headers ?? {}) as any;
-    (config.headers as any).Authorization = `Bearer ${_token}`;
+  if (token) {
+    if (!config.headers) {
+      config.headers = new AxiosHeaders();
+    } else if (!(config.headers instanceof AxiosHeaders)) {
+      config.headers = new AxiosHeaders(config.headers as any);
+    }
+    (config.headers as AxiosHeaders).set("Authorization", `Bearer ${token}`);
   }
   return config;
 });
