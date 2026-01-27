@@ -1,272 +1,270 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { api, apiUrl } from "../lib/api";
+import { api, apiUrl, getApiErrorMessage } from "../lib/api";
 import { useAuth } from "../store/auth";
 
 type Template = {
   id: string;
   name: string;
-  origin: string;
-  sport?: string | null;
-  pages?: number | null;
+  sport: string;
+  pages: number;
+  format: string;
+  thumbnail_url?: string | null;
 };
 
 export default function Dashboard() {
-  const nav = useNavigate();
-  const { clubs, activeClubId, setActiveClub, loadClubs } = useAuth();
+  const clubs = useAuth((s) => s.clubs);
+  const loadClubs = useAuth((s) => s.loadClubs);
+  const activeClubId = useAuth((s) => s.activeClubId);
+  const setActiveClub = useAuth((s) => s.setActiveClub);
+  const logout = useAuth((s) => s.logout);
 
   const [templates, setTemplates] = useState<Template[]>([]);
-  const [templatesError, setTemplatesError] = useState<string | null>(null);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
 
-  const [selected, setSelected] = useState<Template | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
 
   const [importing, setImporting] = useState(false);
-  const [importMsg, setImportMsg] = useState<string | null>(null);
-
-  const activeClub = useMemo(() => {
-    return clubs.find((c) => String(c.id) === String(activeClubId)) ?? null;
-  }, [clubs, activeClubId]);
+  const [importError, setImportError] = useState<string | null>(null);
 
   useEffect(() => {
     loadClubs().catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function fetchTemplates() {
-    setLoadingTemplates(true);
-    setTemplatesError(null);
-    try {
-      const res = await api.get("/api/templates");
-      const list = (res.data as Template[]) || [];
-      setTemplates(list);
-      if (!selected && list.length > 0) setSelected(list[0]);
-    } catch (e: any) {
-      setTemplates([]);
-      setTemplatesError("No se pudieron cargar las plantillas (API)");
-    } finally {
-      setLoadingTemplates(false);
-    }
-  }
-
-  useEffect(() => {
-    fetchTemplates();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    if (!selected) {
-      setPreviewUrl(null);
+    let cancelled = false;
+    (async () => {
+      setLoadingTemplates(true);
+      setTemplatesError(null);
+      try {
+        const res = await api.get("/api/templates");
+        if (!cancelled) setTemplates(res.data || []);
+      } catch (e: any) {
+        if (!cancelled) setTemplatesError(`No se pudieron cargar las plantillas (API): ${getApiErrorMessage(e)}`);
+      } finally {
+        if (!cancelled) setLoadingTemplates(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return templates;
+    return templates.filter((t) => `${t.name} ${t.sport} ${t.format}`.toLowerCase().includes(q));
+  }, [templates, query]);
+
+  const selectedTemplate = useMemo(
+    () => templates.find((t) => t.id === selectedTemplateId) || null,
+    [templates, selectedTemplateId]
+  );
+
+  async function useTemplate(tplId: string) {
+    if (!activeClubId) {
+      alert("Selecciona un club primero.");
       return;
     }
-    // Preview PDF desde el BACKEND real
-    const url = `${apiUrl}/api/templates/${selected.id}/preview?ts=${Date.now()}`;
-    setPreviewUrl(url);
-  }, [selected]);
-
-  async function handleUseTemplate() {
-    if (!activeClubId || !selected) return;
     try {
-      setImporting(true);
-      setImportMsg("Creando proyecto desde plantilla…");
-      const res = await api.post(`/api/projects/from-template/${activeClubId}`, {
-        template_id: selected.id,
+      const res = await api.post(`/api/projects/from_template`, {
+        club_id: activeClubId,
+        template_id: tplId,
       });
-      const projectId = res.data?.id;
-      if (!projectId) throw new Error("No project id");
-      nav(`/editor/${projectId}`);
-    } catch (e) {
-      setImportMsg("Error creando el proyecto (API). Revisa backend/proxy.");
-    } finally {
-      setImporting(false);
-      setTimeout(() => setImportMsg(null), 3000);
+      const projectId = res.data?.project_id;
+      if (!projectId) throw new Error("No project_id");
+      window.location.href = `/editor?project=${encodeURIComponent(projectId)}`;
+    } catch (e: any) {
+      alert(`Error creando proyecto: ${getApiErrorMessage(e)}`);
     }
   }
 
-  async function handleImportPdf(mode: "safe" | "editable", file: File) {
-    if (!activeClubId) return;
-
-    const fd = new FormData();
-    fd.append("file", file);
-
+  async function importPdf(editable: boolean) {
+    setImportError(null);
+    setImporting(true);
     try {
-      setImporting(true);
-      setImportMsg(
-        "Cargando PDF… Esto puede tardar 20–90s (según páginas). Cuando termine, se abrirá el editor."
-      );
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "application/pdf";
+      input.onchange = async () => {
+        const file = input.files?.[0];
+        if (!file) {
+          setImporting(false);
+          return;
+        }
+        if (!activeClubId) {
+          setImportError("Selecciona un club primero.");
+          setImporting(false);
+          return;
+        }
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("club_id", activeClubId);
+        fd.append("editable", editable ? "true" : "false");
 
-      const res = await api.post(`/api/import/${activeClubId}?mode=${mode}`, fd, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-
-      const projectId = res.data?.project_id || res.data?.id;
-      if (!projectId) throw new Error("No project id");
-      nav(`/editor/${projectId}`);
+        try {
+          const res = await api.post(`/api/import_pdf`, fd, {
+            headers: { "Content-Type": "multipart/form-data" },
+          });
+          const projectId = res.data?.project_id;
+          if (!projectId) throw new Error("No project_id");
+          window.location.href = `/editor?project=${encodeURIComponent(projectId)}`;
+        } catch (e: any) {
+          setImportError(`No se pudo cargar el proyecto (API): ${getApiErrorMessage(e)}`);
+        } finally {
+          setImporting(false);
+        }
+      };
+      input.click();
     } catch (e: any) {
-      setImportMsg(
-        `No se pudo cargar el proyecto (API). Revisa backend/proxy.`
-      );
-    } finally {
+      setImportError(getApiErrorMessage(e));
       setImporting(false);
-      // no lo quites instantáneo porque si tarda, el usuario cree que “se colgó”
-      setTimeout(() => setImportMsg(null), 6000);
     }
   }
 
   return (
-    <div className="appShell">
-      <header className="topbar">
+    <div className="app">
+      <div className="topbar">
         <div className="brand">
-          <div className="logoDot" />
-          <div className="brandText">
-            <div className="brandTitle">Sports Magazine SaaS</div>
-            <div className="brandSub">Editor de revistas</div>
+          <div className="logo">S</div>
+          <div>
+            <div className="title">Sports Magazine SaaS</div>
+            <div className="subtitle">Editor de revistas</div>
           </div>
-          <span className="pill">v10.4.7</span>
         </div>
 
-        <div className="topbarRight">
-          <button className="btn" onClick={() => nav("/dashboard")}>
-            Dashboard
-          </button>
-          <button className="btn danger" onClick={() => nav("/logout")}>
-            Salir
-          </button>
+        <div className="top-actions">
+          <a className="btn" href="/dashboard">Dashboard</a>
+          <button className="btn danger" onClick={() => logout()}>Salir</button>
         </div>
-      </header>
+      </div>
 
-      {importMsg ? <div className="banner">{importMsg}</div> : null}
+      {importing && (
+        <div className="banner">
+          <b>Cargando PDF…</b> Esto puede tardar 20–90s según páginas. Cuando termine, se abrirá el editor.
+        </div>
+      )}
 
-      <main className="dashboardGrid">
-        {/* Left panel */}
-        <section className="panel">
-          <h2 className="panelTitle">Tu club</h2>
-
+      <div className="layout">
+        {/* LEFT */}
+        <div className="panel">
+          <h2>Tu club</h2>
           <div className="field">
             <label>Seleccionar club</label>
             <select
-              value={activeClubId ?? ""}
+              value={activeClubId || ""}
               onChange={(e) => setActiveClub(e.target.value || null)}
-              disabled={importing}
             >
+              <option value="">—</option>
               {clubs.map((c) => (
-                <option key={c.id} value={String(c.id)}>
+                <option key={String(c.id)} value={String(c.id)}>
                   {c.name}
                 </option>
               ))}
             </select>
           </div>
 
-          <div className="help">
-            {activeClub?.locked_logo_asset_id
-              ? "Logo portada (bloqueado) disponible."
-              : "Aún no hay logo bloqueado para portada."}
-          </div>
+          <div className="sep" />
 
-          <hr className="sep" />
-
-          <h2 className="panelTitle">Crear revista</h2>
-          <div className="help">Elige plantilla nativa o importa un PDF.</div>
+          <h2>Crear revista</h2>
+          <div className="hint">Elige plantilla nativa o importa un PDF.</div>
 
           <div className="row">
-            <label className="btn">
+            <button className="btn primary" disabled={importing} onClick={() => importPdf(false)}>
               {importing ? "Cargando PDF…" : "Importar PDF (modo seguro)"}
-              <input
-                type="file"
-                accept="application/pdf"
-                style={{ display: "none" }}
-                disabled={importing}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) handleImportPdf("safe", f);
-                  e.currentTarget.value = "";
-                }}
-              />
-            </label>
-
-            <label className="btn">
+            </button>
+            <button className="btn" disabled={importing} onClick={() => importPdf(true)}>
               {importing ? "Cargando PDF…" : "Importar PDF (editable)"}
-              <input
-                type="file"
-                accept="application/pdf"
-                style={{ display: "none" }}
-                disabled={importing}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) handleImportPdf("editable", f);
-                  e.currentTarget.value = "";
-                }}
-              />
-            </label>
-          </div>
-        </section>
-
-        {/* Center preview */}
-        <section className="panel panelPreview">
-          <div className="panelHeader">
-            <h2 className="panelTitle">Previsualización</h2>
-            <button className="btn primary" disabled={!selected || importing} onClick={handleUseTemplate}>
-              Usar plantilla
             </button>
           </div>
 
-          {!selected ? (
-            <div className="help">Selecciona una plantilla para previsualizar.</div>
-          ) : previewUrl ? (
-            <iframe
-              title="preview"
-              className="previewFrame"
-              src={previewUrl}
-            />
-          ) : (
-            <div className="help">Cargando previsualización…</div>
-          )}
-        </section>
+          {importError && <div className="error">{importError}</div>}
+        </div>
 
-        {/* Right templates */}
-        <section className="panel">
-          <h2 className="panelTitle">Plantillas</h2>
-          <div className="help">Catálogo + Generadas</div>
+        {/* CENTER */}
+        <div className="panel center">
+          <div className="panel-head">
+            <h2>Plantillas</h2>
+            <div className="muted">Catálogo + Generadas</div>
+          </div>
 
-          {loadingTemplates ? (
-            <div className="help">Cargando plantillas…</div>
-          ) : templatesError ? (
-            <div className="help">{templatesError}</div>
-          ) : templates.length === 0 ? (
-            <div className="help">
-              No hay plantillas para mostrar. Revisa backend: GET /api/templates
-            </div>
-          ) : (
-            <div className="templateGrid">
-              {templates.map((t) => {
-                const thumb = `${apiUrl}/api/templates/${t.id}/thumbnail?ts=${Date.now()}`;
-                const isActive = selected?.id === t.id;
+          <input
+            className="search"
+            placeholder="Buscar plantilla…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
 
-                return (
-                  <button
-                    key={t.id}
-                    className={`templateCard ${isActive ? "active" : ""}`}
-                    onClick={() => setSelected(t)}
-                    disabled={importing}
-                    title={t.name}
-                  >
-                    <div className="templateThumb">
-                      <img src={thumb} alt={t.name} loading="lazy" />
-                    </div>
-                    <div className="templateMeta">
-                      <div className="templateName">{t.name}</div>
-                      <div className="templateSub">
-                        {t.sport ?? "sport"} · {t.pages ?? 40} páginas · {t.origin}
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
+          {loadingTemplates && <div className="hint">Cargando plantillas…</div>}
+          {templatesError && <div className="error">{templatesError}</div>}
+
+          {!loadingTemplates && !templatesError && filtered.length === 0 && (
+            <div className="hint">
+              No hay plantillas para mostrar. Revisa backend: <code>GET /api/templates</code>.
             </div>
           )}
-        </section>
-      </main>
+
+          <div className="grid">
+            {filtered.map((t) => {
+              const thumb =
+                t.thumbnail_url?.startsWith("http")
+                  ? t.thumbnail_url
+                  : t.thumbnail_url
+                    ? `${apiUrl}${t.thumbnail_url}`
+                    : null;
+
+              return (
+                <div
+                  key={t.id}
+                  className={`card ${selectedTemplateId === t.id ? "selected" : ""}`}
+                  onClick={() => setSelectedTemplateId(t.id)}
+                >
+                  <div className="thumb">
+                    {thumb ? <img src={thumb} alt={t.name} /> : <div className="thumb-ph" />}
+                  </div>
+                  <div className="card-body">
+                    <div className="card-title">{t.name}</div>
+                    <div className="card-meta">
+                      {t.sport} · {t.pages} páginas · {t.format}
+                    </div>
+
+                    <div className="row">
+                      <button className="btn" onClick={(e) => { e.stopPropagation(); setSelectedTemplateId(t.id); }}>
+                        Previsualizar
+                      </button>
+                      <button className="btn primary" onClick={(e) => { e.stopPropagation(); useTemplate(t.id); }}>
+                        Usar plantilla
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* RIGHT */}
+        <div className="panel">
+          <h2>Previsualización</h2>
+          <div className="hint">Selecciona una plantilla y dale a “Previsualizar”.</div>
+
+          {!selectedTemplate && <div className="hint">Sin selección.</div>}
+
+          {selectedTemplate && (
+            <div>
+              <div className="card-title">{selectedTemplate.name}</div>
+              <div className="card-meta">
+                {selectedTemplate.sport} · {selectedTemplate.pages} páginas · {selectedTemplate.format}
+              </div>
+              <div className="sep" />
+              <button className="btn primary" onClick={() => useTemplate(selectedTemplate.id)}>
+                Crear revista con esta plantilla
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
