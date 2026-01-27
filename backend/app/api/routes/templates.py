@@ -1,43 +1,68 @@
-from fastapi import APIRouter, Depends
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, Response, Query
 from sqlalchemy.orm import Session
+
+from app.api.deps import get_current_user  # ✅ aquí, no desde core.security
 from app.core.db import get_db
-from app.core.security import get_current_user
-from app.models.models import Template, Club
+from app.models.models import Template
 from app.schemas.schemas import TemplateOut
-from app.services.catalog_seed import ensure_catalog_seeded
 
 router = APIRouter(prefix="/api/templates", tags=["templates"])
 
+
 @router.get("", response_model=list[TemplateOut])
 def list_templates(
+    q: str | None = Query(default=None),
+    origin: str | None = Query(default=None),
+    sport: str | None = Query(default=None),
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    # 1) si no hay plantillas, seed en caliente (evita quedarte con [] para siempre)
-    if db.query(Template).count() == 0:
-        ensure_catalog_seeded(db)
+    qs = db.query(Template)
 
-    templates_q = db.query(Template).order_by(Template.created_at.desc())
+    if origin:
+        qs = qs.filter(Template.origin == origin)
+    if sport:
+        qs = qs.filter(Template.sport == sport)
+    if q:
+        like = f"%{q}%"
+        qs = qs.filter(Template.name.ilike(like))
 
-    # 2) regla de bloqueo por club: si está bloqueado y chosen_template_id existe pero NO está en DB,
-    #    no devolvemos [] (eso te “rompe” el dashboard). Desbloqueamos o devolvemos todas.
-    club = (
-        db.query(Club)
-        .filter(Club.owner_user_id == user.id)
-        .order_by(Club.created_at.desc())
-        .first()
-    )
-    if club and club.templates_locked and club.chosen_template_id:
-        chosen = (
-            db.query(Template)
-            .filter(Template.id == club.chosen_template_id)
-            .first()
-        )
-        if chosen:
-            return [chosen]
-        # fallback: desbloquea porque el chosen ya no existe
-        club.templates_locked = False
-        club.chosen_template_id = None
-        db.commit()
+    return qs.order_by(Template.created_at.desc()).all()
 
-    return templates_q.all()
+
+@router.get("/{template_id}", response_model=TemplateOut)
+def get_template(
+    template_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    t = db.get(Template, template_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return t
+
+
+@router.get("/{template_id}/thumbnail")
+def get_thumbnail(
+    template_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    t = db.get(Template, template_id)
+    if not t or not t.thumbnail_png:
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+    return Response(content=t.thumbnail_png, media_type="image/png")
+
+
+@router.get("/{template_id}/preview")
+def get_preview_pdf(
+    template_id: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    t = db.get(Template, template_id)
+    if not t or not t.preview_pdf:
+        raise HTTPException(status_code=404, detail="Preview not found")
+    return Response(content=t.preview_pdf, media_type="application/pdf")
