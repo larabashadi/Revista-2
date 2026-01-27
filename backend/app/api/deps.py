@@ -1,35 +1,31 @@
 from __future__ import annotations
-from fastapi import Depends, HTTPException
-from fastapi.security import OAuth2PasswordBearer
+
+from fastapi import Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from app.core.db import get_db
-from app.core.security import decode_token
-from app.models.models import User, Club, Subscription
 
-oauth2 = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+from app.core.security import oauth2_scheme, decode_access_token
+from app.db.session import SessionLocal
+from app.models.user import User
 
-def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2)) -> User:
+
+def get_db():
+    db = SessionLocal()
     try:
-        uid = decode_token(token)
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    user = db.get(User, uid)
+        yield db
+    finally:
+        db.close()
+
+
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    payload = decode_access_token(token)
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido")
+
+    user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    return user
-
-def get_club_or_404(db: Session, club_id: str) -> Club:
-    club = db.get(Club, club_id)
-    if not club:
-        raise HTTPException(status_code=404, detail="Club not found")
-    return club
-
-def get_club_plan(db: Session, club_id: str) -> str:
-    sub = db.query(Subscription).filter(Subscription.club_id==club_id, Subscription.is_active==True).order_by(Subscription.created_at.desc()).first()
-    return sub.plan if sub else "free"
-
-
-def require_super_admin(user: User = Depends(get_current_user)) -> User:
-    if getattr(user, "role", "user") != "super_admin":
-        raise HTTPException(status_code=403, detail="Admin only")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario no existe")
     return user
