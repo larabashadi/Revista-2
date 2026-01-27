@@ -1,29 +1,28 @@
-import axios, { AxiosHeaders, type InternalAxiosRequestConfig } from "axios";
+import axios, { AxiosInstance, InternalAxiosRequestConfig } from "axios";
 
-const rawBase = (import.meta as any).env?.VITE_API_BASE ?? "";
-export const apiUrl: string = String(rawBase || "").replace(/\/+$/, "");
+export const apiUrl = (import.meta as any).env?.VITE_API_BASE
+  ? String((import.meta as any).env.VITE_API_BASE).replace(/\/$/, "")
+  : ""; // si está vacío, usará mismo host (dev)
 
-let token: string | null = null;
-
-export const setToken = (t: string | null) => {
-  token = t;
-};
-
-export const api = axios.create({
+export const api: AxiosInstance = axios.create({
   baseURL: apiUrl || undefined,
+  withCredentials: false,
   timeout: 120000,
 });
 
+let _token: string | null = null;
+
+export function setToken(token: string | null) {
+  _token = token;
+}
+
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  if (token) {
-    if (!config.headers) {
-      config.headers = new AxiosHeaders();
-    } else if (!(config.headers instanceof AxiosHeaders)) {
-      config.headers = new AxiosHeaders(config.headers as any);
-    }
-    (config.headers as AxiosHeaders).set("Authorization", `Bearer ${token}`);
-  }
+  const headers = (config.headers ?? {}) as any;
+  if (_token) headers.Authorization = `Bearer ${_token}`;
+  config.headers = headers;
   return config;
 });
+
+export const absApi = (u: string) => (u.startsWith("/api/") ? `${apiUrl}${u}` : u);
 
 export default api;
