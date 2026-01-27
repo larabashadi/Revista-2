@@ -1,13 +1,19 @@
-:root{
+:root {
+  --bg0:#f3f4f6;
+  --bg1:#ffffff;
+  --bg2:#e5e7eb;
   --text:#111827;
   --muted:#6b7280;
+  --accent:#2563eb;
+  --danger:#dc2626;
+  --shadow:0 12px 30px rgba(0,0,0,.10);
+
+  /* ✅ FALTABAN ESTAS */
+  --border: rgba(17,24,39,.14);
   --panel: rgba(255,255,255,.72);
-  --panel2: rgba(255,255,255,.50);
-  --border: rgba(17,24,39,.12);
-  --shadow: 0 12px 30px rgba(0,0,0,.10);
-  --accent:#7c3aed;
-  --accent2:#22c55e;
+  --panel2: rgba(255,255,255,.88);
 }
+
 
 *{ box-sizing:border-box; }
 html,body{ height:100%; }
