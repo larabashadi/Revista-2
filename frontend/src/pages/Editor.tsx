@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { api } from "../lib/api";
+import api, { apiUrl } from "../lib/api";
 import { useAuth } from "../store/auth";
 import { Stage, Layer, Rect, Text, Image as KImage, Transformer, Group } from "react-konva";
 
@@ -419,8 +419,9 @@ export default function Editor() {
 
   const newId = () => {
     try {
-      // @ts-ignore
-      return crypto?.randomUUID?.() || `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      (crypto?.randomUUID
+    ? `${prefix}_${crypto.randomUUID()}`
+    : `${prefix}_${String(Math.random()).slice(2)}`);
     } catch {
       return `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     }
