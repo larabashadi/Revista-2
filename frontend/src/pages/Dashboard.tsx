@@ -1,150 +1,155 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import api, { apiUrl } from "../lib/api";
+import { api, apiUrl } from "../lib/api";
 import { useAuth } from "../store/auth";
 
 type Template = {
   id: string;
   name: string;
+  origin: string;
   sport?: string | null;
-  pages_count?: number | null;
-  thumbnail_asset_id?: string | null;
-  origin?: string | null;
+  pages?: number | null;
 };
 
 export default function Dashboard() {
   const nav = useNavigate();
-  const fileRef = useRef<HTMLInputElement | null>(null);
+  const { clubs, activeClubId, setActiveClub, loadClubs } = useAuth();
 
-  const {
-    clubs,
-    activeClubId,
-    setActiveClub,
-    loadClubs,
-  } = useAuth();
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+
+  const [selected, setSelected] = useState<Template | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
 
   const activeClub = useMemo(() => {
-    if (!activeClubId) return null;
     return clubs.find((c) => String(c.id) === String(activeClubId)) ?? null;
   }, [clubs, activeClubId]);
 
-  const [templates, setTemplates] = useState<Template[]>([]);
-  const [tplLoading, setTplLoading] = useState(false);
-  const [tplError, setTplError] = useState<string | null>(null);
-
-  const [importing, setImporting] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
-
   useEffect(() => {
-    loadClubs().catch(() => void 0);
+    loadClubs().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function loadTemplates() {
-    setTplLoading(true);
-    setTplError(null);
+  async function fetchTemplates() {
+    setLoadingTemplates(true);
+    setTemplatesError(null);
     try {
       const res = await api.get("/api/templates");
-      setTemplates((res.data as Template[]) || []);
+      const list = (res.data as Template[]) || [];
+      setTemplates(list);
+      if (!selected && list.length > 0) setSelected(list[0]);
     } catch (e: any) {
-      const msg =
-        e?.response?.status
-          ? `API ${e.response.status}`
-          : e?.message || "Error cargando plantillas";
-      setTplError(msg);
       setTemplates([]);
+      setTemplatesError("No se pudieron cargar las plantillas (API)");
     } finally {
-      setTplLoading(false);
+      setLoadingTemplates(false);
     }
   }
 
   useEffect(() => {
-    loadTemplates().catch(() => void 0);
+    fetchTemplates();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const thumbUrl = (templateId: string) =>
-    `${apiUrl}/api/templates/${templateId}/thumbnail?page=0&size=520`;
-
-  async function createFromTemplate(templateId: string) {
-    if (!activeClubId) {
-      setNotice("Crea o selecciona un club antes de elegir plantilla.");
+  useEffect(() => {
+    if (!selected) {
+      setPreviewUrl(null);
       return;
     }
-    setNotice(null);
+    // Preview PDF desde el BACKEND real
+    const url = `${apiUrl}/api/templates/${selected.id}/preview?ts=${Date.now()}`;
+    setPreviewUrl(url);
+  }, [selected]);
+
+  async function handleUseTemplate() {
+    if (!activeClubId || !selected) return;
     try {
-      const res = await api.post(`/api/projects/from-template/${templateId}`, {
-        club_id: String(activeClubId),
+      setImporting(true);
+      setImportMsg("Creando proyecto desde plantilla…");
+      const res = await api.post(`/api/projects/from-template/${activeClubId}`, {
+        template_id: selected.id,
       });
-      const projectId = (res.data as any)?.project_id;
-      if (!projectId) throw new Error("No se creó project_id");
+      const projectId = res.data?.id;
+      if (!projectId) throw new Error("No project id");
       nav(`/editor/${projectId}`);
-    } catch (e: any) {
-      setNotice(
-        `No se pudo crear el proyecto desde la plantilla. ${
-          e?.response?.status ? `[${e.response.status}]` : ""
-        } ${e?.message || ""}`.trim()
-      );
+    } catch (e) {
+      setImportMsg("Error creando el proyecto (API). Revisa backend/proxy.");
+    } finally {
+      setImporting(false);
+      setTimeout(() => setImportMsg(null), 3000);
     }
   }
 
-  async function importPDF(file: File) {
-    if (!activeClubId) {
-      setNotice("Crea o selecciona un club antes de importar un PDF.");
-      return;
-    }
+  async function handleImportPdf(mode: "safe" | "editable", file: File) {
+    if (!activeClubId) return;
 
-    setImporting(true);
-    setNotice("Cargando PDF... (puede tardar según el tamaño)");
+    const fd = new FormData();
+    fd.append("file", file);
+
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-
-      const res = await api.post(
-        `/api/import/${String(activeClubId)}?mode=custom&preset=a4_background`,
-        fd,
-        { headers: { "Content-Type": "multipart/form-data" } }
+      setImporting(true);
+      setImportMsg(
+        "Cargando PDF… Esto puede tardar 20–90s (según páginas). Cuando termine, se abrirá el editor."
       );
 
-      const projectId = (res.data as any)?.project_id;
-      if (!projectId) throw new Error("Import devolvió respuesta sin project_id");
+      const res = await api.post(`/api/import/${activeClubId}?mode=${mode}`, fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+
+      const projectId = res.data?.project_id || res.data?.id;
+      if (!projectId) throw new Error("No project id");
       nav(`/editor/${projectId}`);
     } catch (e: any) {
-      setNotice(
-        `No se pudo importar el PDF. ${
-          e?.response?.status ? `[${e.response.status}]` : ""
-        } ${e?.message || ""}`.trim()
+      setImportMsg(
+        `No se pudo cargar el proyecto (API). Revisa backend/proxy.`
       );
     } finally {
       setImporting(false);
-    }
-  }
-
-  async function createClub(name: string) {
-    setNotice(null);
-    try {
-      await api.post("/api/clubs", { name });
-      await loadClubs();
-      setNotice("Club creado.");
-    } catch (e: any) {
-      setNotice(`No se pudo crear el club. ${e?.message || ""}`.trim());
+      // no lo quites instantáneo porque si tarda, el usuario cree que “se colgó”
+      setTimeout(() => setImportMsg(null), 6000);
     }
   }
 
   return (
     <div className="appShell">
-      {/* LEFT */}
-      <div className="sidebar">
-        <div className="sectionTitle">Club</div>
+      <header className="topbar">
+        <div className="brand">
+          <div className="logoDot" />
+          <div className="brandText">
+            <div className="brandTitle">Sports Magazine SaaS</div>
+            <div className="brandSub">Editor de revistas</div>
+          </div>
+          <span className="pill">v10.4.7</span>
+        </div>
 
-        <div className="card">
-          <div className="small">Selecciona un club activo</div>
-          <div className="row" style={{ marginTop: 8 }}>
+        <div className="topbarRight">
+          <button className="btn" onClick={() => nav("/dashboard")}>
+            Dashboard
+          </button>
+          <button className="btn danger" onClick={() => nav("/logout")}>
+            Salir
+          </button>
+        </div>
+      </header>
+
+      {importMsg ? <div className="banner">{importMsg}</div> : null}
+
+      <main className="dashboardGrid">
+        {/* Left panel */}
+        <section className="panel">
+          <h2 className="panelTitle">Tu club</h2>
+
+          <div className="field">
+            <label>Seleccionar club</label>
             <select
-              className="input"
               value={activeClubId ?? ""}
               onChange={(e) => setActiveClub(e.target.value || null)}
+              disabled={importing}
             >
-              <option value="">(elige club)</option>
               {clubs.map((c) => (
                 <option key={c.id} value={String(c.id)}>
                   {c.name}
@@ -153,143 +158,115 @@ export default function Dashboard() {
             </select>
           </div>
 
-          <div className="hr" />
-
-          <div className="small">Crear club</div>
-          <CreateClubForm onCreate={createClub} disabled={false} />
-        </div>
-
-        <div className="card">
-          <div className="sectionTitle">Importar PDF</div>
-          <div className="small">
-            Importa tu revista en PDF para editar encima.
+          <div className="help">
+            {activeClub?.locked_logo_asset_id
+              ? "Logo portada (bloqueado) disponible."
+              : "Aún no hay logo bloqueado para portada."}
           </div>
 
-          <div style={{ marginTop: 10 }}>
-            <button
-              className="btn btnPrimary"
-              disabled={importing}
-              onClick={() => fileRef.current?.click()}
-            >
-              {importing ? "Cargando..." : "Subir PDF"}
+          <hr className="sep" />
+
+          <h2 className="panelTitle">Crear revista</h2>
+          <div className="help">Elige plantilla nativa o importa un PDF.</div>
+
+          <div className="row">
+            <label className="btn">
+              {importing ? "Cargando PDF…" : "Importar PDF (modo seguro)"}
+              <input
+                type="file"
+                accept="application/pdf"
+                style={{ display: "none" }}
+                disabled={importing}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) handleImportPdf("safe", f);
+                  e.currentTarget.value = "";
+                }}
+              />
+            </label>
+
+            <label className="btn">
+              {importing ? "Cargando PDF…" : "Importar PDF (editable)"}
+              <input
+                type="file"
+                accept="application/pdf"
+                style={{ display: "none" }}
+                disabled={importing}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) handleImportPdf("editable", f);
+                  e.currentTarget.value = "";
+                }}
+              />
+            </label>
+          </div>
+        </section>
+
+        {/* Center preview */}
+        <section className="panel panelPreview">
+          <div className="panelHeader">
+            <h2 className="panelTitle">Previsualización</h2>
+            <button className="btn primary" disabled={!selected || importing} onClick={handleUseTemplate}>
+              Usar plantilla
             </button>
           </div>
 
-          <input
-            ref={fileRef}
-            type="file"
-            accept="application/pdf"
-            style={{ display: "none" }}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              e.target.value = "";
-              if (f) importPDF(f);
-            }}
-          />
-        </div>
+          {!selected ? (
+            <div className="help">Selecciona una plantilla para previsualizar.</div>
+          ) : previewUrl ? (
+            <iframe
+              title="preview"
+              className="previewFrame"
+              src={previewUrl}
+            />
+          ) : (
+            <div className="help">Cargando previsualización…</div>
+          )}
+        </section>
 
-        {notice && <div className="notice">{notice}</div>}
-      </div>
+        {/* Right templates */}
+        <section className="panel">
+          <h2 className="panelTitle">Plantillas</h2>
+          <div className="help">Catálogo + Generadas</div>
 
-      {/* CENTER */}
-      <div className="main">
-        <div className="sectionTitle">Plantillas de revistas</div>
-        <div className="small">
-          Si no importas un PDF, elige una plantilla para empezar.
-        </div>
-
-        <div className="hr" />
-
-        {tplLoading && <div className="notice">Cargando plantillas...</div>}
-        {tplError && (
-          <div className="notice">
-            No se pudieron cargar las plantillas (API): {tplError}
-          </div>
-        )}
-
-        {!tplLoading && !tplError && templates.length === 0 && (
-          <div className="notice">
-            No hay plantillas para mostrar. Revisa backend: GET /api/templates
-          </div>
-        )}
-
-        <div className="templates">
-          {templates.map((t) => (
-            <div
-              key={t.id}
-              className="templateCard"
-              onClick={() => createFromTemplate(t.id)}
-              title="Usar esta plantilla"
-            >
-              <img
-                className="templateThumb"
-                src={thumbUrl(t.id)}
-                loading="lazy"
-                decoding="async"
-                alt={t.name}
-              />
-              <div className="templateMeta">
-                <div className="templateName">{t.name}</div>
-                <div className="templateInfo">
-                  {t.sport ? t.sport : "Deporte"} ·{" "}
-                  {t.pages_count ? `${t.pages_count} páginas` : "—"}
-                </div>
-              </div>
+          {loadingTemplates ? (
+            <div className="help">Cargando plantillas…</div>
+          ) : templatesError ? (
+            <div className="help">{templatesError}</div>
+          ) : templates.length === 0 ? (
+            <div className="help">
+              No hay plantillas para mostrar. Revisa backend: GET /api/templates
             </div>
-          ))}
-        </div>
-      </div>
+          ) : (
+            <div className="templateGrid">
+              {templates.map((t) => {
+                const thumb = `${apiUrl}/api/templates/${t.id}/thumbnail?ts=${Date.now()}`;
+                const isActive = selected?.id === t.id;
 
-      {/* RIGHT */}
-      <div className="inspector">
-        <div className="sectionTitle">Estado</div>
-        <div className="card">
-          <div className="small">API Base</div>
-          <div style={{ fontSize: 12, marginTop: 6, wordBreak: "break-all" }}>
-            {apiUrl}
-          </div>
-          <div className="hr" />
-          <div className="small">Club activo</div>
-          <div style={{ fontSize: 13, marginTop: 6 }}>
-            {activeClub?.name ?? "(ninguno)"}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function CreateClubForm({
-  onCreate,
-  disabled,
-}: {
-  onCreate: (name: string) => void;
-  disabled: boolean;
-}) {
-  const [name, setName] = useState("");
-  return (
-    <div style={{ marginTop: 8 }}>
-      <input
-        className="input"
-        placeholder="Nombre del club"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        disabled={disabled}
-      />
-      <div style={{ marginTop: 10 }}>
-        <button
-          className="btn"
-          disabled={disabled || !name.trim()}
-          onClick={() => {
-            const v = name.trim();
-            if (!v) return;
-            setName("");
-            onCreate(v);
-          }}
-        >
-          Crear
-        </button>
-      </div>
+                return (
+                  <button
+                    key={t.id}
+                    className={`templateCard ${isActive ? "active" : ""}`}
+                    onClick={() => setSelected(t)}
+                    disabled={importing}
+                    title={t.name}
+                  >
+                    <div className="templateThumb">
+                      <img src={thumb} alt={t.name} loading="lazy" />
+                    </div>
+                    <div className="templateMeta">
+                      <div className="templateName">{t.name}</div>
+                      <div className="templateSub">
+                        {t.sport ?? "sport"} · {t.pages ?? 40} páginas · {t.origin}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      </main>
     </div>
   );
 }
