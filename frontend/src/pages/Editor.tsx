@@ -1,12 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
-import { apiUrl } from "../lib/api";
 import { useAuth } from "../store/auth";
 import { Stage, Layer, Rect, Text, Image as KImage, Transformer, Group } from "react-konva";
 
 const A4_W = 595.2756;
 const A4_H = 841.8898;
+
+// Base URL for backend when frontend is hosted separately (e.g., Render).
+// In dev, Vite proxy handles relative /api calls, so VITE_API_BASE can be empty.
+const API_BASE = String((import.meta as any)?.env?.VITE_API_BASE || "").replace(/\/+$/, "");
+const withApiBase = (path: string) => (API_BASE ? `${API_BASE}${path.startsWith("/") ? path : `/${path}`}` : path);
+const assetFileUrl = (assetId: string) => withApiBase(`/api/assets/file/${assetId}`);
 
 type ImgMap = Record<string, HTMLImageElement>;
 
@@ -71,6 +76,26 @@ function rgbaFromHex(hex: string, a: number) {
   const r = parseInt(full.slice(0, 2), 16) || 0;
   const g = parseInt(full.slice(2, 4), 16) || 0;
   const b = parseInt(full.slice(4, 6), 16) || 0;
+  const alpha = Math.max(0, Math.min(1, a));
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function clamp255(n: number) {
+  const x = Number.isFinite(n) ? n : 0;
+  return Math.max(0, Math.min(255, Math.round(x)));
+}
+function hexFromRgb(rgb: any): string {
+  if (!Array.isArray(rgb) || rgb.length < 3) return "#111827";
+  const r = clamp255(rgb[0]);
+  const g = clamp255(rgb[1]);
+  const b = clamp255(rgb[2]);
+  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+}
+function rgbaFromRgb(rgb: any, a: number) {
+  if (!Array.isArray(rgb) || rgb.length < 3) return rgbaFromHex("#000000", a);
+  const r = clamp255(rgb[0]);
+  const g = clamp255(rgb[1]);
+  const b = clamp255(rgb[2]);
   const alpha = Math.max(0, Math.min(1, a));
   return `rgba(${r},${g},${b},${alpha})`;
 }
@@ -251,10 +276,10 @@ export default function Editor() {
     for (const layer of p.layers || []) {
       for (const it of layer.items || []) {
         if (it.type === "ImageFrame" && it.assetRef && !String(it.assetRef).startsWith("{{")) {
-          urls.add(apiUrl(`/api/assets/file/${it.assetRef}`));
+          urls.add(assetFileUrl(String(it.assetRef)));
         }
         if (it.type === "LockedLogoStamp" && club?.locked_logo_asset_id) {
-          urls.add(apiUrl(`/api/assets/file/${club.locked_logo_asset_id}`));
+          urls.add(assetFileUrl(String(club.locked_logo_asset_id)));
         }
       }
     }
@@ -392,10 +417,13 @@ export default function Editor() {
   }, [projectId, doc, pageIndex]);
 
 
-  const newId = (prefix?: string) => {
-    // @ts-ignore
-    const base = (crypto?.randomUUID?.() as string | undefined) || `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    return prefix ? `${prefix}_${base}` : base;
+  const newId = () => {
+    try {
+      // @ts-ignore
+      return crypto?.randomUUID?.() || `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    } catch {
+      return `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    }
   };
 
   const ensureContentLayer = (page: any) => {
@@ -511,7 +539,7 @@ export default function Editor() {
     if (hasDetectedLayer) return;
 
     try {
-      const res = await api.post(`/api/projects/item/${projectId}/detect?page_index=${pageIndex}`);
+      const res = await api.post(`/api/projects/item/${projectId}/detect/${pageIndex}`);
       const detected = res.data || {};
       setDoc((prev: any) => {
         if (!prev) return prev;
@@ -519,25 +547,52 @@ export default function Editor() {
         const page = next.pages[pageIndex];
         page.layers = page.layers || [];
 
-        const textItems = (detected.text || []).map((t: any) => ({
-          id: `detected_text_${t.id}`,
-          type: "TextFrame",
-          rect: { x: t.x, y: t.y, w: t.w, h: t.h },
-          text: t.text || "",
-          font: "Inter",
-          size: 14,
-          color: t.color_hex || "#111827",
-          bg: rgbaFromHex(t.bg_hex || "#ffffff", 0.92),
-          bg_hex: t.bg_hex || "#ffffff",
-        }));
+        const toRect = (src: any) => {
+          const r = Array.isArray(src?.rect) ? src.rect : null;
+          if (r && r.length >= 4) {
+            const x0 = Number(r[0]) || 0;
+            const y0 = Number(r[1]) || 0;
+            const x1 = Number(r[2]) || 0;
+            const y1 = Number(r[3]) || 0;
+            return { x: x0, y: y0, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) };
+          }
+          const x = Number(src?.x) || 0;
+          const y = Number(src?.y) || 0;
+          const w = Number(src?.w ?? src?.width) || 1;
+          const h = Number(src?.h ?? src?.height) || 1;
+          return { x, y, w: Math.max(1, w), h: Math.max(1, h) };
+        };
 
-        const imgItems = (detected.images || []).map((im: any) => ({
-          id: `detected_img_${im.id}`,
-          type: "ImageFrame",
-          rect: { x: im.x, y: im.y, w: im.w, h: im.h },
-          // placeholder until user replaces
-          assetId: im.asset_id || null,
-        }));
+        const textItems = (detected.text || []).map((t: any) => {
+          const rect = toRect(t);
+          const colorHex = t.color_hex || (Array.isArray(t.color) ? hexFromRgb(t.color) : "#111827");
+          const bgHex = t.bg_hex || (Array.isArray(t.bg) ? hexFromRgb(t.bg) : "#ffffff");
+          const bgFill = Array.isArray(t.bg) ? rgbaFromRgb(t.bg, 0.92) : rgbaFromHex(bgHex, 0.92);
+          return {
+            id: `detected_text_${t.id ?? uuid()}`,
+            type: "TextFrame",
+            rect,
+            text: t.text || "",
+            font: "Inter",
+            size: Number(t.size) || 14,
+            color: colorHex,
+            bg: bgFill,
+            bg_hex: bgHex,
+          };
+        });
+
+        const imgItems = (detected.images || []).map((im: any) => {
+          const rect = toRect(im);
+          return {
+            id: `detected_img_${im.id ?? uuid()}`,
+            type: "ImageFrame",
+            rect,
+            // if backend provides extracted asset, show it; otherwise user can replace
+            assetRef: im.asset_id || im.assetRef || null,
+            fitMode: "cover",
+            crop: { x: 0, y: 0, w: 1, h: 1 },
+          };
+        });
 
         page.layers = page.layers.filter((l: any) => !String(l.id || "").startsWith("detected_"));
         if (textItems.length) page.layers.push({ id: "detected_text", role: "overlay", items: textItems });
@@ -551,38 +606,13 @@ export default function Editor() {
 
   const exportPdf = async (quality: "web" | "print") => {
     try {
-      const safeName = (s: string) =>
-        (s || "")
-          .trim()
-          .replace(/[^a-zA-Z0-9\- _]/g, "_")
-          .replace(/\s+/g, "_")
-          .slice(0, 80);
-
+      const safeName = (s: string) => (s || "")
+        .trim()
+        .replace(/[^a-zA-Z0-9\- _]/g, "_")
+        .replace(/\s+/g, "_")
+        .slice(0, 80) || "Club";
       const clubName = safeName(club?.name || "Club");
       const downloadName = `Revista_${clubName}.pdf`;
-
-      // ✅ Prefer sync export (works even without Redis/worker)
-      try {
-        const res = await api.post(
-          `/api/export/sync/${projectId}`,
-          { quality },
-          { responseType: "blob", timeout: 0 }
-        );
-
-        const blob = new Blob([res.data], { type: "application/pdf" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = downloadName;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-        setToast("Exportación completada.");
-        return;
-      } catch {
-        // fallback to async job export if sync isn't available
-      }
 
       // 1) Create export job
       const { data } = await api.post(`/api/export/${projectId}`, { quality });
@@ -591,28 +621,60 @@ export default function Editor() {
       // 2) Poll job status
       const started = Date.now();
       let exportAssetId: string | null = null;
-      while (Date.now() - started < 180_000) {
+      while (Date.now() - started < 120_000) {
+        // backend exposes /api/export/job/{job_id}; older builds used /status.
         const st = await api.get(`/api/export/job/${jobId}`);
-        if (st.data.status === "finished") {
-          exportAssetId = st.data.asset_id;
+        const s = st.data?.status;
+        if (s === "failed") {
+          throw new Error(st.data?.error || "Export failed");
+        }
+        if (s === "finished") {
+          exportAssetId = st.data?.export_asset_id || st.data?.result?.export_asset_id;
           break;
         }
-        if (st.data.status === "failed") {
-          throw new Error(st.data.error || "Export failed");
-        }
-        await new Promise((r) => setTimeout(r, 1200));
+        await new Promise((r) => setTimeout(r, 800));
       }
-      if (!exportAssetId) throw new Error("Timeout exportando.");
+      if (!exportAssetId) throw new Error("Export timeout");
 
-      // 3) Download file (absolute to backend)
-      const downloadUrl = apiUrl(
-        `/api/export/download/${exportAssetId}?filename=${encodeURIComponent(downloadName)}`
-      );
-      window.location.href = downloadUrl;
-      setToast("Exportación completada.");
+      // 3) Download as blob (so it works with auth/proxy)
+      const res = await api.get(`/api/export/download/${exportAssetId}?filename=${encodeURIComponent(downloadName)}`, { responseType: "blob" });
+      const blob = new Blob([res.data], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = downloadName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      showToast("PDF listo ✅");
     } catch (e: any) {
       console.error(e);
-      setToast(`Error exportando: ${e?.message || "Network Error"}`);
+      // Fallback: if the background worker/queue fails, try synchronous export.
+      try {
+        const res2 = await api.post(`/api/export/sync/${projectId}`, { quality }, { responseType: "blob" as any });
+        const blob2 = new Blob([res2.data], { type: "application/pdf" });
+        const url2 = URL.createObjectURL(blob2);
+        const a2 = document.createElement("a");
+        a2.href = url2;
+        const safeName2 = (s: string) => (s || "")
+          .trim()
+          .replace(/[^a-zA-Z0-9\- _]/g, "_")
+          .replace(/\s+/g, "_")
+          .slice(0, 80) || "Club";
+        const clubName2 = safeName2(club?.name || "Club");
+        a2.download = `Revista_${clubName2}.pdf`;
+        document.body.appendChild(a2);
+        a2.click();
+        a2.remove();
+        URL.revokeObjectURL(url2);
+        showToast("PDF listo ✅");
+        return;
+      } catch (e2: any) {
+        console.error(e2);
+      }
+      const msg = (e?.message || e?.response?.data?.detail || "Error exportando").toString();
+      showToast(`Error exportando: ${msg}`);
     }
   };
 
@@ -677,19 +739,9 @@ export default function Editor() {
 
   const uploadAsset = async (file: File) => {
     if (!club) throw new Error("No hay club activo");
-
-    const ok = file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name || "");
-    if (!ok) throw new Error("Formato no soportado. Usa PNG/JPG/WEBP/GIF/BMP.");
-
     const fd = new FormData();
     fd.append("file", file);
-
-    const { data } = await api.post(`/api/assets/${club.id}`, fd, {
-      timeout: 0,
-      maxBodyLength: Infinity as any,
-      maxContentLength: Infinity as any,
-    });
-
+    const { data } = await api.post(`/api/assets/${club.id}`, fd, { headers: { "Content-Type": "multipart/form-data" } });
     return data.id as string;
   };
 
@@ -1010,12 +1062,12 @@ export default function Editor() {
           : refStr && refStr.startsWith("data:")
             ? refStr
             : refStr
-              ? apiUrl(`/api/assets/file/${refStr}`)
+              ? assetFileUrl(refStr)
               : null;
 
       // Locked logo stamp uses club locked_logo_asset_id
       const finalUrl = it.role === "locked_logo" && club?.locked_logo_asset_id
-        ? apiUrl(`/api/assets/file/${club.locked_logo_asset_id}`)
+        ? assetFileUrl(String(club.locked_logo_asset_id))
         : url;
 
       const img = finalUrl ? imgMap[finalUrl] : null;
@@ -1046,26 +1098,8 @@ export default function Editor() {
           }}
           onDragEnd={(e) => updateItemRect(id, { x: e.target.x(), y: e.target.y() })}
         >
-          {/* Fondo o imagen normal */}
-          {!img ? (
-            <Rect
-              width={r.w}
-              height={r.h}
-              fill={isBg ? "#ffffff" : "#eef2ff"}
-              opacity={isBg ? 1 : (it.opacity ?? 1)}
-            />
-          ) : null}
-
-          {img ? (
-            <KImage
-              image={img}
-              width={r.w}
-              height={r.h}
-              // Para el fondo importado, fuerza opacidad 1 para evitar “capa oscura”
-              opacity={isBg ? 1 : (it.opacity ?? 1)}
-            />
-          ) : null}
-
+          <Rect width={r.w} height={r.h} fill={isBg ? "#0b1220" : "#eef2ff"} opacity={it.opacity ?? 1} />
+          {img ? <KImage image={img} width={r.w} height={r.h} opacity={it.opacity ?? 1} /> : null}
           {!img && !isBg ? (
             <Text text="Imagen" x={10} y={10} fontSize={14} fill="#64748b" />
           ) : null}
@@ -1084,27 +1118,9 @@ export default function Editor() {
           y={it.rect.y}
           draggable={!locked}
           onClick={() => {
-  if (locked) return;
-
-  const ref = findItem(id);
-  const isDetected = !!ref?.layer?.id?.startsWith("detected");
-
-  if (isDetected) {
-    // Convierte SOLO este bloque a editable
-    promoteDetectedItem(id);
-
-    // Abre editor de texto después de que el state se actualice
-    setTimeout(() => {
-      setSelectedId(id);
-      openRichText(id);
-    }, 0);
-
-    return;
-  }
-
-  setSelectedId(id);
-}}
-
+            if (locked) return;
+            setSelectedId(id);
+          }}
           onTap={() => {
             if (locked) return;
             setSelectedId(id);
@@ -1155,7 +1171,7 @@ export default function Editor() {
 
     if (it.type === "LockedLogoStamp") {
       // rendered as ImageFrame path
-      const finalUrl = club?.locked_logo_asset_id ? apiUrl(`/api/assets/file/${club.locked_logo_asset_id}`) : null;
+      const finalUrl = club?.locked_logo_asset_id ? assetFileUrl(String(club.locked_logo_asset_id)) : null;
       const img = finalUrl ? imgMap[finalUrl] : null;
       return (
         <Group key={id} id={id} x={r.x} y={r.y}>
@@ -1367,11 +1383,20 @@ export default function Editor() {
                 if (clickedOnEmpty) setSelectedId(null);
               }}
             >
-              {(page?.layers || []).map((layer: any) => (
-                <Layer key={layer.id}>
-                  {(layer.items || []).map((it: any) => renderItem(it, layer.locked === true, { id: layer.id, name: layer.name }))}
-                </Layer>
-              ))}
+              {(page?.layers || [])
+                .filter((layer: any) => {
+                  const lid = String(layer?.id || "");
+                  if (lid === "detected_text") return !!detectTextByPage[safePageIndex];
+                  if (lid === "detected_images") return !!detectImagesByPage[safePageIndex];
+                  return true;
+                })
+                .map((layer: any) => (
+                  <Layer key={layer.id}>
+                    {(layer.items || []).map((it: any) =>
+                      renderItem(it, layer.locked === true, { id: layer.id, name: layer.name })
+                    )}
+                  </Layer>
+                ))}
               <Layer>
                 <Transformer
                   ref={trRef}
