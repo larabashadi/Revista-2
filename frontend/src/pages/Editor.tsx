@@ -417,15 +417,11 @@ export default function Editor() {
   }, [projectId, doc, pageIndex]);
 
 
-  const newId = () => {
-    try {
-      (crypto?.randomUUID
+const newId = (prefix = "id") =>
+  (crypto?.randomUUID
     ? `${prefix}_${crypto.randomUUID()}`
     : `${prefix}_${String(Math.random()).slice(2)}`);
-    } catch {
-      return `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    }
-  };
+
 
   const ensureContentLayer = (page: any) => {
     page.layers = page.layers || [];
