@@ -15,7 +15,7 @@ from app.models.models import User
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# OJO: tokenUrl debe apuntar al endpoint POST de login
+# Debe apuntar al endpoint POST real del login (OAuth2PasswordRequestForm)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 
@@ -25,6 +25,11 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
+
+
+# ✅ Mantener el nombre que tu código ya usa (auth.py)
+def hash_password(password: str) -> str:
+    return get_password_hash(password)
 
 
 def create_access_token(
@@ -43,7 +48,7 @@ def create_access_token(
 
 def decode_token(token: str) -> str:
     """
-    Devuelve el 'sub' del JWT (en este proyecto: user_id).
+    Devuelve el 'sub' del JWT (en este proyecto normalmente user_id).
     """
     try:
         payload = jwt.decode(token, settings.APP_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
@@ -63,9 +68,6 @@ def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ) -> User:
-    """
-    Dependencia estándar para proteger endpoints.
-    """
     user_id = decode_token(token)
     user = db.get(User, user_id)
     if not user:
