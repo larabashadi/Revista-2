@@ -1,68 +1,28 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response, Query
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user  # ✅ aquí, no desde core.security
-from app.core.db import get_db
-from app.models.models import Template
-from app.schemas.schemas import TemplateOut
+from app.api.deps import get_db, get_current_user
+from app.models.user import User
+from app.services.templates_service import list_templates, get_template_thumbnail, get_template_preview_pdf
 
 router = APIRouter(prefix="/api/templates", tags=["templates"])
 
 
-@router.get("", response_model=list[TemplateOut])
-def list_templates(
-    q: str | None = Query(default=None),
-    origin: str | None = Query(default=None),
-    sport: str | None = Query(default=None),
-    db: Session = Depends(get_db),
-    user=Depends(get_current_user),
-):
-    qs = db.query(Template)
-
-    if origin:
-        qs = qs.filter(Template.origin == origin)
-    if sport:
-        qs = qs.filter(Template.sport == sport)
-    if q:
-        like = f"%{q}%"
-        qs = qs.filter(Template.name.ilike(like))
-
-    return qs.order_by(Template.created_at.desc()).all()
-
-
-@router.get("/{template_id}", response_model=TemplateOut)
-def get_template(
-    template_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(get_current_user),
-):
-    t = db.get(Template, template_id)
-    if not t:
-        raise HTTPException(status_code=404, detail="Template not found")
-    return t
+@router.get("")
+def templates(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    # list_templates ya mezcla catálogo + generadas del user (según tu servicio)
+    return list_templates(db=db, user=user)
 
 
 @router.get("/{template_id}/thumbnail")
-def get_thumbnail(
-    template_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(get_current_user),
-):
-    t = db.get(Template, template_id)
-    if not t or not t.thumbnail_png:
-        raise HTTPException(status_code=404, detail="Thumbnail not found")
-    return Response(content=t.thumbnail_png, media_type="image/png")
+def template_thumbnail(template_id: str, page: int = 0, size: int = 480,
+                      db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    data, media_type = get_template_thumbnail(db=db, user=user, template_id=template_id, page=page, size=size)
+    return data
 
 
-@router.get("/{template_id}/preview")
-def get_preview_pdf(
-    template_id: str,
-    db: Session = Depends(get_db),
-    user=Depends(get_current_user),
-):
-    t = db.get(Template, template_id)
-    if not t or not t.preview_pdf:
-        raise HTTPException(status_code=404, detail="Preview not found")
-    return Response(content=t.preview_pdf, media_type="application/pdf")
+@router.get("/{template_id}/preview.pdf")
+def template_preview(template_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    return get_template_preview_pdf(db=db, user=user, template_id=template_id)
