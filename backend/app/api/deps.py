@@ -8,8 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
 from app.core.security import decode_token
-from app.models.models import User
-
+from app.models.models import User, Club, Subscription
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
